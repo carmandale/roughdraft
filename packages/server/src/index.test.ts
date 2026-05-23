@@ -10,6 +10,7 @@ import { createApp } from "./index";
 describe("createApp", () => {
   let projectDir: string;
   let homeDir: string;
+  let previousVoiceTranscribeCommand: string | undefined;
   const serverRoot = path.resolve(
     fileURLToPath(new URL("../../..", import.meta.url)),
   );
@@ -17,9 +18,18 @@ describe("createApp", () => {
   beforeEach(() => {
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "roughdraft-server-"));
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "roughdraft-home-"));
+    previousVoiceTranscribeCommand =
+      process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND;
+    delete process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND;
   });
 
   afterEach(() => {
+    if (previousVoiceTranscribeCommand === undefined) {
+      delete process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND;
+    } else {
+      process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND =
+        previousVoiceTranscribeCommand;
+    }
     fs.rmSync(projectDir, { recursive: true, force: true });
     fs.rmSync(homeDir, { recursive: true, force: true });
   });
@@ -493,6 +503,69 @@ describe("createApp", () => {
       updateAvailable: true,
       updateCommand: "npm i -g roughdraft@latest",
     });
+  });
+
+  it("fails voice transcription loudly when no local command is configured", async () => {
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+    });
+
+    const startResponse = await request(app).post("/api/voice/session/start");
+    expect(startResponse.status).toBe(201);
+
+    const chunkResponse = await request(app)
+      .post("/api/voice/session/chunk")
+      .send({
+        sessionId: startResponse.body.sessionId,
+        mimeType: "audio/webm",
+        audioBase64: Buffer.from("fake audio").toString("base64"),
+      });
+    expect(chunkResponse.status).toBe(200);
+
+    const stopResponse = await request(app)
+      .post("/api/voice/session/stop")
+      .send({ sessionId: startResponse.body.sessionId });
+
+    expect(stopResponse.status).toBe(500);
+    expect(stopResponse.body.error).toContain(
+      "Local voice transcription is not configured",
+    );
+  });
+
+  it("reads whisper-style transcript output from the command output directory", async () => {
+    const scriptPath = path.join(projectDir, "transcribe.cjs");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
+        'fs.writeFileSync(path.join(process.argv[3], "audio.txt"), "spoken feedback\\n");',
+      ].join("\n"),
+    );
+    process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND = `${process.execPath} ${scriptPath} {audio} {outputDir}`;
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+    });
+
+    const startResponse = await request(app).post("/api/voice/session/start");
+    expect(startResponse.status).toBe(201);
+    await request(app)
+      .post("/api/voice/session/chunk")
+      .send({
+        sessionId: startResponse.body.sessionId,
+        mimeType: "audio/webm",
+        audioBase64: Buffer.from("fake audio").toString("base64"),
+      })
+      .expect(200);
+
+    const stopResponse = await request(app)
+      .post("/api/voice/session/stop")
+      .send({ sessionId: startResponse.body.sessionId });
+
+    expect(stopResponse.status).toBe(200);
+    expect(stopResponse.body).toEqual({ transcript: "spoken feedback" });
   });
 
   it("lists directories from the home directory when no path is provided", async () => {

@@ -257,7 +257,7 @@ ROUGHDRAFT_LLM_MODEL
 
 ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND
   Local transcription command template used by `/api/voice/session/stop`.
-  Supported placeholders: `{audio}`, `{output}`, `{model}`.
+  Supported placeholders: `{audio}`, `{output}`, `{outputDir}`, `{model}`.
 
 ROUGHDRAFT_VOICE_MODEL_DIR
   Optional model directory used to resolve `{model}`. Defaults to

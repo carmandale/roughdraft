@@ -700,12 +700,16 @@ async function transcribeLocalAudioFromBuffer(
     logVoice("transcribe.skip.no_command", {
       envKey: ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND_ENV,
     });
-    return "";
+    throw new Error(
+      `Local voice transcription is not configured. Set ${ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND_ENV}.`,
+    );
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "roughdraft-voice-"));
   const audioPath = path.join(tempDir, "audio.webm");
   const outputPath = path.join(tempDir, "transcript");
+  const outputDir = tempDir;
+  const audioOutputPath = path.join(outputDir, "audio.txt");
   fs.writeFileSync(audioPath, audioBuffer);
 
   const { command, args } = parseCommandTemplate(commandTemplate);
@@ -714,6 +718,7 @@ async function transcribeLocalAudioFromBuffer(
     arg
       .replaceAll("{audio}", audioPath)
       .replaceAll("{output}", outputPath)
+      .replaceAll("{outputDir}", outputDir)
       .replaceAll("{model}", modelPath),
   );
   logVoice("transcribe.exec.start", {
@@ -723,6 +728,7 @@ async function transcribeLocalAudioFromBuffer(
     audioBytes: audioBuffer.length,
     audioPath,
     outputPath,
+    outputDir,
   });
 
   try {
@@ -745,6 +751,13 @@ async function transcribeLocalAudioFromBuffer(
     if (fs.existsSync(`${outputPath}.txt`)) {
       const transcript = fs.readFileSync(`${outputPath}.txt`, "utf-8").trim();
       logVoice("transcribe.output.txt", {
+        transcriptChars: transcript.length,
+      });
+      return transcript;
+    }
+    if (fs.existsSync(audioOutputPath)) {
+      const transcript = fs.readFileSync(audioOutputPath, "utf-8").trim();
+      logVoice("transcribe.output.audio_txt", {
         transcriptChars: transcript.length,
       });
       return transcript;

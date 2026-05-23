@@ -2,13 +2,13 @@
 
 ## Corrections
 
-- Do not frame Hex support as manual transcript paste. The user wants natural speaking: Roughdraft should focus a capture field so Hex can inject dictated text while the user speaks.
+- PR #85's review concept is select-to-record and release/clear selection to transcribe/action the recording. Do not add a separate Dictate button or manual paste flow.
 
 ## User Preferences
 
 ## Patterns That Work
 
-- For PR #85-style voice feedback, treating OS dictation tools as focused text-input sources is more robust than depending on browser microphone capture.
+- Select-to-record needs local transcription configured and client-side transcription bounded with visible failure states.
 
 ## Patterns That Don't Work
 
@@ -16,4 +16,4 @@
 
 ## Domain Notes
 
-- Hex (`com.kitlangton.Hex`) captures/transcribes outside Roughdraft and injects text into the focused app, so Roughdraft should focus a dedicated capture field and consume the resulting text as the feedback utterance.
+- Hex (`com.kitlangton.Hex`) captures/transcribes outside Roughdraft. Unless Hex exposes an automation API, it is not the same control path as Roughdraft's automatic browser microphone recording.

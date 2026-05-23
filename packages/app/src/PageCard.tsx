@@ -53,17 +53,11 @@ export interface DocumentSaveController {
 type EditorViewMode = "rich-text" | "code";
 export type DocumentInteractionMode = "viewing" | "suggesting" | "editing";
 type VoiceProgressStage =
-  | "listening"
   | "transcribing"
   | "processing"
   | "editing"
   | "done"
   | "error";
-
-interface DictatedFeedbackCapture {
-  runId: number;
-  selection: VoiceSelectionSnapshot;
-}
 
 interface PageCardProps {
   page: Page;
@@ -225,6 +219,48 @@ function shouldIgnoreUtterance(utterance: string): boolean {
   if (!hasEditIntent && words.length <= 2) return true;
 
   return false;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  ms: number,
+  message: string,
+) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(message);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 export interface DraftSuggestionState {
@@ -752,26 +788,12 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceSelectionRef = useRef<VoiceSelectionSnapshot | null>(null);
   const voicePinnedSelectionRef = useRef<VoiceSelectionSnapshot | null>(null);
-  const [dictatedFeedbackCapture, setDictatedFeedbackCapture] =
-    useState<DictatedFeedbackCapture | null>(null);
-  const dictatedFeedbackCaptureRef = useRef<DictatedFeedbackCapture | null>(
-    null,
-  );
-  const dictatedFeedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const dictatedFeedbackInputTimerRef = useRef<number | null>(null);
   const shouldRecordVoiceRef = useRef(false);
   const voiceAppendTargetBySelectionRef = useRef<Map<string, string>>(
     new Map(),
   );
   const voiceProgressRunRef = useRef(0);
   const voiceCaptureContextRef = useRef<VoiceCaptureContext | null>(null);
-  const processVoiceUtteranceRef = useRef<
-    (
-      utterance: string,
-      runId: number,
-      targetSelection: VoiceSelectionSnapshot | null,
-    ) => Promise<void>
-  >(async () => {});
   const applyVoiceActionRef = useRef<
     (selection: VoiceSelectionSnapshot, action: VoiceActionResult) => void
   >(() => {});
@@ -883,21 +905,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     return `${selection.from}:${selection.to}:${selection.selectedText}`;
   }, []);
 
-  const clearDictatedFeedbackInputTimer = useCallback(() => {
-    if (dictatedFeedbackInputTimerRef.current == null) return;
-    window.clearTimeout(dictatedFeedbackInputTimerRef.current);
-    dictatedFeedbackInputTimerRef.current = null;
-  }, []);
-
-  const clearDictatedFeedbackCapture = useCallback(() => {
-    clearDictatedFeedbackInputTimer();
-    dictatedFeedbackCaptureRef.current = null;
-    setDictatedFeedbackCapture(null);
-    if (dictatedFeedbackInputRef.current) {
-      dictatedFeedbackInputRef.current.value = "";
-    }
-  }, [clearDictatedFeedbackInputTimer]);
-
   const refreshCriticChanges = useCallback(() => {
     if (criticChangeFrameRef.current != null) {
       cancelAnimationFrame(criticChangeFrameRef.current);
@@ -944,34 +951,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           if (files.length > 0) {
             event.preventDefault();
             void insertFiles(files);
-            return true;
-          }
-
-          const dictatedFeedbackCaptureState =
-            dictatedFeedbackCaptureRef.current;
-          const dictatedFeedbackText = event.clipboardData
-            ?.getData("text/plain")
-            ?.trim();
-          if (
-            dictatedFeedbackCaptureState &&
-            dictatedFeedbackText &&
-            interactionModeRef.current !== "viewing"
-          ) {
-            event.preventDefault();
-            clearDictatedFeedbackCapture();
-            const { runId, selection } = dictatedFeedbackCaptureState;
-            setVoiceStatus("processing");
-            setVoiceStatusMessage("");
-            setVoiceProgress({
-              runId,
-              stage: "processing",
-              message: "Processing dictated feedback...",
-            });
-            void processVoiceUtteranceRef.current(
-              dictatedFeedbackText,
-              runId,
-              selection,
-            );
             return true;
           }
 
@@ -1513,62 +1492,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     [activeDocumentPath, backend],
   );
 
-  useEffect(() => {
-    processVoiceUtteranceRef.current = processVoiceUtterance;
-  }, [processVoiceUtterance]);
-
-  const processDictatedFeedbackText = useCallback(
-    (utterance: string) => {
-      const capture = dictatedFeedbackCaptureRef.current;
-      const normalizedUtterance = utterance.trim();
-      if (!capture || !normalizedUtterance) return;
-
-      clearDictatedFeedbackCapture();
-      setVoiceStatus("processing");
-      setVoiceStatusMessage("");
-      setVoiceProgress({
-        runId: capture.runId,
-        stage: "processing",
-        message: "Processing feedback...",
-      });
-      void processVoiceUtteranceRef.current(
-        normalizedUtterance,
-        capture.runId,
-        capture.selection,
-      );
-    },
-    [clearDictatedFeedbackCapture],
-  );
-
-  const queueDictatedFeedbackText = useCallback(
-    (utterance: string) => {
-      const capture = dictatedFeedbackCaptureRef.current;
-      if (!capture || !utterance.trim()) return;
-
-      clearDictatedFeedbackInputTimer();
-      dictatedFeedbackInputTimerRef.current = window.setTimeout(() => {
-        dictatedFeedbackInputTimerRef.current = null;
-        processDictatedFeedbackText(utterance);
-      }, 300);
-    },
-    [clearDictatedFeedbackInputTimer, processDictatedFeedbackText],
-  );
-
-  useEffect(() => {
-    return () => {
-      clearDictatedFeedbackInputTimer();
-    };
-  }, [clearDictatedFeedbackInputTimer]);
-
-  useEffect(() => {
-    if (!dictatedFeedbackCapture) return;
-
-    const frame = window.requestAnimationFrame(() => {
-      dictatedFeedbackInputRef.current?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [dictatedFeedbackCapture]);
-
   const flushRecordedAudio = useCallback(
     async (
       chunks: Blob[],
@@ -1582,139 +1505,21 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
         message: "Transcribing audio...",
       });
 
-      const originalBlob = new Blob(chunks, {
-        type: chunks[0]?.type || "audio/webm",
-      });
-      let uploadBlob = originalBlob;
       try {
-        const context = new AudioContext();
-        const decoded = await context.decodeAudioData(
-          await originalBlob.arrayBuffer(),
-        );
-        const rms = audioBufferRms(decoded);
-        if (rms < 0.0035) {
-          await context.close();
-          setVoiceProgress({
-            runId,
-            stage: "done",
-            message: "No speech detected.",
-          });
-          window.setTimeout(() => {
-            setVoiceProgress((current) =>
-              current?.runId === runId ? null : current,
-            );
-          }, 900);
-          return;
-        }
-        uploadBlob = audioBufferToWavBlob(decoded);
-        await context.close();
-      } catch {
-        uploadBlob = originalBlob;
-      }
-
-      const buffer = await uploadBlob.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      let binary = "";
-      for (let index = 0; index < bytes.length; index += 1) {
-        const byte = bytes[index];
-        if (byte !== undefined) {
-          binary += String.fromCharCode(byte);
-        }
-      }
-
-      const startResponse = await fetch("/api/voice/session/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!startResponse.ok) {
-        setVoiceProgress({
-          runId,
-          stage: "error",
-          message: "Voice feedback failed: unable to start transcription.",
+        const originalBlob = new Blob(chunks, {
+          type: chunks[0]?.type || "audio/webm",
         });
-        return;
-      }
-      const startPayload = (await startResponse.json()) as {
-        sessionId?: string;
-      };
-      const sessionId = startPayload.sessionId;
-      if (!sessionId) {
-        setVoiceProgress({
-          runId,
-          stage: "error",
-          message: "Voice feedback failed: missing transcription session.",
-        });
-        return;
-      }
-
-      const chunkResponse = await fetch("/api/voice/session/chunk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          mimeType: uploadBlob.type || "audio/webm",
-          audioBase64: btoa(binary),
-        }),
-      });
-      if (!chunkResponse.ok) {
-        setVoiceProgress({
-          runId,
-          stage: "error",
-          message: "Voice feedback failed: upload error.",
-        });
-        return;
-      }
-
-      const stopResponse = await fetch("/api/voice/session/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      });
-      if (!stopResponse.ok) {
-        setVoiceProgress({
-          runId,
-          stage: "error",
-          message: "Voice feedback failed: transcription stop error.",
-        });
-        return;
-      }
-      const stopPayload = (await stopResponse.json()) as {
-        transcript?: string;
-      };
-      const transcript = stopPayload.transcript?.trim() ?? "";
-      if (transcript.length > 0) {
-        await processVoiceUtterance(transcript, runId, targetSelection);
-      } else {
-        setVoiceProgress({
-          runId,
-          stage: "done",
-          message: "No speech detected.",
-        });
-        window.setTimeout(() => {
-          setVoiceProgress((current) =>
-            current?.runId === runId ? null : current,
+        let uploadBlob = originalBlob;
+        let context: AudioContext | null = null;
+        try {
+          context = new AudioContext();
+          const decoded = await withTimeout(
+            context.decodeAudioData(await originalBlob.arrayBuffer()),
+            5_000,
+            "Audio decoding timed out; uploading the raw recording.",
           );
-        }, 1400);
-      }
-    },
-    [processVoiceUtterance],
-  );
-
-  const stopVoiceCapture = useCallback(
-    (cancel = false) => {
-      shouldRecordVoiceRef.current = false;
-      const recorder = mediaRecorderRef.current;
-      const captureContext = voiceCaptureContextRef.current;
-      if (recorder && recorder.state !== "inactive") {
-        if (cancel && captureContext) {
-          captureContext.shouldTranscribe = false;
-        }
-        const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
-        if (captureContext && !cancel) {
-          const elapsedMs = Date.now() - captureContext.startedAtMs;
-          if (elapsedMs < 450) {
-            captureContext.shouldTranscribe = false;
+          const rms = audioBufferRms(decoded);
+          if (rms < 0.0035) {
             setVoiceProgress({
               runId,
               stage: "done",
@@ -1725,59 +1530,184 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
                 current?.runId === runId ? null : current,
               );
             }, 900);
-          } else {
-            setVoiceProgress({
-              runId,
-              stage: "transcribing",
-              message: "Transcribing audio...",
-            });
+            return;
+          }
+          uploadBlob = audioBufferToWavBlob(decoded);
+        } catch {
+          uploadBlob = originalBlob;
+        } finally {
+          await context?.close().catch(() => {});
+        }
+
+        const buffer = await uploadBlob.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (let index = 0; index < bytes.length; index += 1) {
+          const byte = bytes[index];
+          if (byte !== undefined) {
+            binary += String.fromCharCode(byte);
           }
         }
-        if (cancel) {
-          setVoiceProgress(null);
+
+        const startResponse = await fetchWithTimeout(
+          "/api/voice/session/start",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          },
+          10_000,
+          "Timed out starting voice transcription.",
+        );
+        if (!startResponse.ok) {
+          setVoiceProgress({
+            runId,
+            stage: "error",
+            message: "Voice feedback failed: unable to start transcription.",
+          });
+          return;
         }
-        recorder.requestData();
-        recorder.stop();
-      }
-      mediaRecorderRef.current = null;
-      voiceCaptureContextRef.current = null;
-      if (mediaStreamRef.current) {
-        for (const track of mediaStreamRef.current.getTracks()) {
-          track.stop();
+        const startPayload = (await startResponse.json()) as {
+          sessionId?: string;
+        };
+        const sessionId = startPayload.sessionId;
+        if (!sessionId) {
+          setVoiceProgress({
+            runId,
+            stage: "error",
+            message: "Voice feedback failed: missing transcription session.",
+          });
+          return;
         }
-        mediaStreamRef.current = null;
+
+        const chunkResponse = await fetchWithTimeout(
+          "/api/voice/session/chunk",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId,
+              mimeType: uploadBlob.type || "audio/webm",
+              audioBase64: btoa(binary),
+            }),
+          },
+          10_000,
+          "Timed out uploading voice audio.",
+        );
+        if (!chunkResponse.ok) {
+          setVoiceProgress({
+            runId,
+            stage: "error",
+            message: "Voice feedback failed: upload error.",
+          });
+          return;
+        }
+
+        const stopResponse = await fetchWithTimeout(
+          "/api/voice/session/stop",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId }),
+          },
+          130_000,
+          "Voice transcription timed out.",
+        );
+        if (!stopResponse.ok) {
+          const payload = (await stopResponse.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          setVoiceStatus("error");
+          const message = payload.error ?? "transcription stop error";
+          setVoiceStatusMessage(message);
+          setVoiceProgress({
+            runId,
+            stage: "error",
+            message: `Voice feedback failed: ${message}`,
+          });
+          return;
+        }
+        const stopPayload = (await stopResponse.json()) as {
+          transcript?: string;
+        };
+        const transcript = stopPayload.transcript?.trim() ?? "";
+        if (transcript.length > 0) {
+          await processVoiceUtterance(transcript, runId, targetSelection);
+        } else {
+          setVoiceProgress({
+            runId,
+            stage: "done",
+            message: "No speech detected.",
+          });
+          window.setTimeout(() => {
+            setVoiceProgress((current) =>
+              current?.runId === runId ? null : current,
+            );
+          }, 1400);
+        }
+      } catch (error) {
+        setVoiceStatus("error");
+        const message =
+          error instanceof Error ? error.message : "Voice transcription failed";
+        setVoiceStatusMessage(message);
+        setVoiceProgress({
+          runId,
+          stage: "error",
+          message: `Voice feedback failed: ${message}`,
+        });
       }
-      voicePinnedSelectionRef.current = null;
-      if (cancel) {
-        clearDictatedFeedbackCapture();
-      }
-      setVoiceStatus("idle");
     },
-    [clearDictatedFeedbackCapture],
+    [processVoiceUtterance],
   );
 
-  const handleDictateFeedback = useCallback(() => {
-    const currentEditor = editorRef.current;
-    if (!currentEditor) return;
-    const snapshot = getSelectionSnapshot(currentEditor);
-    if (!snapshot) return;
-
-    stopVoiceCapture(true);
-    voiceSelectionRef.current = snapshot;
-    voicePinnedSelectionRef.current = snapshot;
+  const stopVoiceCapture = useCallback((cancel = false) => {
     shouldRecordVoiceRef.current = false;
-    const runId = ++voiceProgressRunRef.current;
-    const capture = { runId, selection: snapshot };
-    dictatedFeedbackCaptureRef.current = capture;
-    setDictatedFeedbackCapture(capture);
-    setVoiceStatus("paused");
-    setVoiceStatusMessage("Listening with Hex");
-    setVoiceProgress({
-      runId,
-      stage: "listening",
-      message: "Listening with Hex...",
-    });
-  }, [getSelectionSnapshot, stopVoiceCapture]);
+    const recorder = mediaRecorderRef.current;
+    const captureContext = voiceCaptureContextRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      if (cancel && captureContext) {
+        captureContext.shouldTranscribe = false;
+      }
+      const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
+      if (captureContext && !cancel) {
+        const elapsedMs = Date.now() - captureContext.startedAtMs;
+        if (elapsedMs < 450) {
+          captureContext.shouldTranscribe = false;
+          setVoiceProgress({
+            runId,
+            stage: "done",
+            message: "No speech detected.",
+          });
+          window.setTimeout(() => {
+            setVoiceProgress((current) =>
+              current?.runId === runId ? null : current,
+            );
+          }, 900);
+        } else {
+          setVoiceProgress({
+            runId,
+            stage: "transcribing",
+            message: "Transcribing audio...",
+          });
+        }
+      }
+      if (cancel) {
+        setVoiceProgress(null);
+      }
+      recorder.requestData();
+      recorder.stop();
+    }
+    mediaRecorderRef.current = null;
+    voiceCaptureContextRef.current = null;
+    if (mediaStreamRef.current) {
+      for (const track of mediaStreamRef.current.getTracks()) {
+        track.stop();
+      }
+      mediaStreamRef.current = null;
+    }
+    voicePinnedSelectionRef.current = null;
+    setVoiceStatus("idle");
+  }, []);
 
   const ensureVoiceCapture = useCallback(() => {
     if (mediaRecorderRef.current || !shouldRecordVoiceRef.current) return;
@@ -1861,7 +1791,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       if (!currentEditor) return;
       const snapshot = getSelectionSnapshot(currentEditor);
       if (!snapshot) {
-        clearDictatedFeedbackCapture();
         voiceSelectionRef.current = null;
         shouldRecordVoiceRef.current = false;
         setVoiceStatus("paused");
@@ -1906,18 +1835,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
 
       voiceSelectionRef.current = snapshot;
       voicePinnedSelectionRef.current = snapshot;
-      const dictatedFeedbackSelection = dictatedFeedbackCaptureRef.current;
-      if (dictatedFeedbackSelection) {
-        if (
-          selectionKey(dictatedFeedbackSelection.selection) ===
-          selectionKey(snapshot)
-        ) {
-          shouldRecordVoiceRef.current = false;
-          setVoiceStatus("paused");
-          return;
-        }
-        clearDictatedFeedbackCapture();
-      }
       if (voiceCaptureContextRef.current) {
         voiceCaptureContextRef.current.selection = snapshot;
       }
@@ -1933,12 +1850,10 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       editor.off("selectionUpdate", handleSelectionChange);
     };
   }, [
-    clearDictatedFeedbackCapture,
     editor,
     ensureVoiceCapture,
     getSelectionSnapshot,
     interactionMode,
-    selectionKey,
     stopVoiceCapture,
   ]);
 
@@ -2831,17 +2746,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
                   </div>
                 </div>
               ) : null}
-              {dictatedFeedbackCapture ? (
-                <textarea
-                  ref={dictatedFeedbackInputRef}
-                  data-testid="dictated-feedback-capture"
-                  aria-label="Dictated feedback capture"
-                  className="fixed bottom-0 left-0 size-px resize-none opacity-0"
-                  onInput={(event) => {
-                    queueDictatedFeedbackText(event.currentTarget.value);
-                  }}
-                />
-              ) : null}
               <EditorContextMenu
                 editor={editor}
                 backend={backend}
@@ -2863,11 +2767,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
                   interactionMode === "viewing"
                     ? undefined
                     : handleSuggestInsertion
-                }
-                onDictateFeedback={
-                  interactionMode === "viewing"
-                    ? undefined
-                    : handleDictateFeedback
                 }
               >
                 <div data-testid="rich-text-editor">
