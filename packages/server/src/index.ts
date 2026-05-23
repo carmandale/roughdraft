@@ -198,9 +198,11 @@ function logVoice(event: string, data: Record<string, unknown> = {}): void {
   console.log(`[voice] ${JSON.stringify(payload)}`);
 }
 
-function summarizeApiKey(
-  value: string | undefined,
-): { present: boolean; prefix: string | null; length: number } {
+function summarizeApiKey(value: string | undefined): {
+  present: boolean;
+  prefix: string | null;
+  length: number;
+} {
   const trimmed = value?.trim() ?? "";
   if (trimmed.length === 0) {
     return { present: false, prefix: null, length: 0 };
@@ -637,13 +639,12 @@ async function inferVoiceActionWithOpenRouter(
         uncertain: parsedResult.uncertain === true,
       });
     }
-    const resolved =
-      parsedResult ?? {
-        action: "comment",
-        content: utterance,
-        confidence: 0.2,
-        uncertain: true,
-      };
+    const resolved = parsedResult ?? {
+      action: "comment",
+      content: utterance,
+      confidence: 0.2,
+      uncertain: true,
+    };
     const coerced = coerceVoiceActionResult(utterance, resolved);
     if (coerced.action !== resolved.action) {
       logVoice("inference.coerce_to_comment", {

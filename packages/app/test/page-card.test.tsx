@@ -206,6 +206,39 @@ async function typeTextAsBrowserInput(editor: Editor, text: string) {
   await flushReact();
 }
 
+async function pastePlainTextAsBrowserInput(editor: Editor, text: string) {
+  const event = new Event("paste", {
+    bubbles: true,
+    cancelable: true,
+  }) as ClipboardEvent;
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      files: [],
+      getData(type: string) {
+        return type === "text/plain" ? text : "";
+      },
+    },
+  });
+  let handled = false;
+
+  await act(async () => {
+    let pasteHandler:
+      | ((view: Editor["view"], event: ClipboardEvent) => boolean)
+      | null = null;
+    editor.view.someProp("handlePaste", (handler) => {
+      pasteHandler = handler as typeof pasteHandler;
+      return true;
+    });
+    expect(pasteHandler).not.toBeNull();
+    handled = pasteHandler?.(editor.view, event) ?? false;
+    await Promise.resolve();
+  });
+
+  await flushReact();
+
+  return handled;
+}
+
 async function pressEditorKey(
   editor: Editor,
   key: string,
@@ -977,6 +1010,102 @@ describe("PageCard editor integration", () => {
         /^Use \{~~old~>new~~\}\{id="s1" by="user" at="[^"]+"\} text\n$/,
       ),
     );
+  });
+
+  it("routes an armed dictated feedback paste through voice feedback processing", async () => {
+    const processVoiceUtterance = vi.fn().mockResolvedValue({
+      action: "comment" as const,
+      content: "This needs a clearer example.",
+      confidence: 0.9,
+    });
+    const backend: StorageBackend = {
+      ...createBackend(),
+      processVoiceUtterance,
+    };
+    const rendered = await renderPageCard({
+      page: {
+        id: "doc-dictated-feedback-paste-1",
+        title: "Doc Dictated Feedback Paste 1",
+        content: "Keep this target sentence.",
+      },
+      activeDocumentPath: "draft.md",
+      backend,
+      interactionMode: "editing",
+      selected: true,
+    });
+    const editor = rendered.getEditor();
+
+    await selectText(editor, "target");
+    await flushAnimationFrame();
+
+    await act(async () => {
+      getToolbarButton(rendered.container, "Dictate").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await Promise.resolve();
+    });
+
+    vi.useFakeTimers();
+    const handled = await pastePlainTextAsBrowserInput(
+      editor,
+      "Explain this with a concrete product example.",
+    );
+    await flushReact();
+    await flushReact();
+
+    expect(handled).toBe(true);
+    expect(processVoiceUtterance).toHaveBeenCalledWith(
+      "draft.md",
+      "Explain this with a concrete product example.",
+      expect.objectContaining({
+        selectedText: "target",
+      }),
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(rendered.onSave).toHaveBeenCalledWith(
+      "doc-dictated-feedback-paste-1",
+      expect.stringMatching(
+        /\{==target==\}\{>>This needs a clearer example\.<<\}\{id="c1" by="user" at="[^"]+"\}/,
+      ),
+    );
+  });
+
+  it("leaves ordinary editing paste alone unless dictated feedback is armed", async () => {
+    const processVoiceUtterance = vi.fn().mockResolvedValue({
+      action: "comment" as const,
+      content: "This should not be used.",
+      confidence: 0.9,
+    });
+    const backend: StorageBackend = {
+      ...createBackend(),
+      processVoiceUtterance,
+    };
+    const rendered = await renderPageCard({
+      page: {
+        id: "doc-ordinary-paste-1",
+        title: "Doc Ordinary Paste 1",
+        content: "Keep this target sentence.",
+      },
+      activeDocumentPath: "draft.md",
+      backend,
+      interactionMode: "editing",
+      selected: true,
+    });
+
+    await selectText(rendered.getEditor(), "target");
+
+    const handled = await pastePlainTextAsBrowserInput(
+      rendered.getEditor(),
+      "normal clipboard text",
+    );
+
+    expect(handled).toBe(false);
+    expect(processVoiceUtterance).not.toHaveBeenCalled();
   });
 
   it("suggesting mode groups sequential replacement keystrokes into one suggestion", async () => {

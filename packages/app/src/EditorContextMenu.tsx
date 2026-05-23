@@ -12,6 +12,7 @@ import {
   List,
   ListOrdered,
   MessageSquarePlus,
+  Mic,
   Minus,
   Plus,
   Quote,
@@ -34,6 +35,7 @@ interface EditorContextMenuProps {
   onSuggestDeletion?: () => void;
   onSuggestReplacement?: () => void;
   onSuggestInsertion?: () => void;
+  onDictateFeedback?: () => void;
   children: ReactNode;
 }
 
@@ -201,6 +203,7 @@ export function EditorContextMenu({
   onSuggestDeletion,
   onSuggestReplacement,
   onSuggestInsertion,
+  onDictateFeedback,
   children,
 }: EditorContextMenuProps) {
   const [position, setPosition] = useState<MenuPosition | null>(null);
@@ -700,6 +703,15 @@ export function EditorContextMenu({
               icon={<Link2 className="size-4" />}
               active={selectionMenuState.isLinkActive}
               onClick={openLinkPopover}
+            />
+            <SelectionMenuButton
+              label="Dictate"
+              icon={<Mic className="size-4" />}
+              disabled={!onDictateFeedback || editor?.state.selection.empty}
+              onClick={() => {
+                onDictateFeedback?.();
+                setSelectionActionPosition(null);
+              }}
             />
             <SelectionMenuButton
               label="Suggest insertion"
