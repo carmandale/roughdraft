@@ -239,6 +239,32 @@ async function pastePlainTextAsBrowserInput(editor: Editor, text: string) {
   return handled;
 }
 
+async function typeIntoDictatedFeedbackCapture(
+  container: HTMLElement,
+  text: string,
+) {
+  const capture = getByTestId<HTMLTextAreaElement>(
+    container,
+    "dictated-feedback-capture",
+  );
+  await act(async () => {
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    valueSetter?.call(capture, text);
+    capture.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: text,
+        inputType: "insertText",
+      }),
+    );
+    await Promise.resolve();
+  });
+  await flushReact();
+}
+
 async function pressEditorKey(
   editor: Editor,
   key: string,
@@ -1012,7 +1038,7 @@ describe("PageCard editor integration", () => {
     );
   });
 
-  it("routes an armed dictated feedback paste through voice feedback processing", async () => {
+  it("routes naturally dictated feedback input through voice feedback processing", async () => {
     const processVoiceUtterance = vi.fn().mockResolvedValue({
       action: "comment" as const,
       content: "This needs a clearer example.",
@@ -1024,8 +1050,8 @@ describe("PageCard editor integration", () => {
     };
     const rendered = await renderPageCard({
       page: {
-        id: "doc-dictated-feedback-paste-1",
-        title: "Doc Dictated Feedback Paste 1",
+        id: "doc-dictated-feedback-input-1",
+        title: "Doc Dictated Feedback Input 1",
         content: "Keep this target sentence.",
       },
       activeDocumentPath: "draft.md",
@@ -1044,16 +1070,27 @@ describe("PageCard editor integration", () => {
       );
       await Promise.resolve();
     });
+    await flushAnimationFrame();
 
     vi.useFakeTimers();
-    const handled = await pastePlainTextAsBrowserInput(
-      editor,
+    const capture = getByTestId<HTMLTextAreaElement>(
+      rendered.container,
+      "dictated-feedback-capture",
+    );
+    expect(document.activeElement).toBe(capture);
+
+    await typeIntoDictatedFeedbackCapture(
+      rendered.container,
       "Explain this with a concrete product example.",
     );
     await flushReact();
     await flushReact();
 
-    expect(handled).toBe(true);
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
     expect(processVoiceUtterance).toHaveBeenCalledWith(
       "draft.md",
       "Explain this with a concrete product example.",
@@ -1068,7 +1105,7 @@ describe("PageCard editor integration", () => {
     });
 
     expect(rendered.onSave).toHaveBeenCalledWith(
-      "doc-dictated-feedback-paste-1",
+      "doc-dictated-feedback-input-1",
       expect.stringMatching(
         /\{==target==\}\{>>This needs a clearer example\.<<\}\{id="c1" by="user" at="[^"]+"\}/,
       ),

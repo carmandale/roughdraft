@@ -91,7 +91,7 @@ Paragraph with **bold**, [link](https://example.com), `inline code`.
 | Document | Suggesting mode | Open mode menu and choose Suggesting | `document-mode-trigger` | Selection actions should create suggestions instead of direct edits. |
 | Document | Viewing mode | Open mode menu and choose Viewing | `document-mode-trigger` | Editing controls should look non-editable. |
 | Document | Voice status: recording | Select text in rich editor while mic permission is granted | `voice-review-status` | Badge should show `Voice: recording`. |
-| Document | Dictated feedback paste ready | Select text in rich editor and choose Dictate from the selection menu | `selection-menu-action-dictate`, `voice-review-progress-toast` | Toast should say `Paste dictated feedback.`; use Hex or any dictation tool to paste the transcript. |
+| Document | Dictated feedback listening | Select text in rich editor and choose Dictate from the selection menu | `selection-menu-action-dictate`, `voice-review-progress-toast`, `dictated-feedback-capture` | Toast should say `Listening with Hex...`; the capture field should have focus for the dictated text. |
 | Document | Voice status: processing | Speak an utterance while selection is active | `voice-review-status` | Badge should show `Voice: processing` while inference runs. |
 | Document | Voice status: paused | Clear selection after recording starts | `voice-review-status` | Badge should show `Voice: paused` after debounce window. |
 | Document | Voice status: error | Deny mic permission or run unsupported browser | `voice-review-status` | Badge should show `Voice: error` with a message. |

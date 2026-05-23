@@ -53,12 +53,17 @@ export interface DocumentSaveController {
 type EditorViewMode = "rich-text" | "code";
 export type DocumentInteractionMode = "viewing" | "suggesting" | "editing";
 type VoiceProgressStage =
-  | "waiting"
+  | "listening"
   | "transcribing"
   | "processing"
   | "editing"
   | "done"
   | "error";
+
+interface DictatedFeedbackCapture {
+  runId: number;
+  selection: VoiceSelectionSnapshot;
+}
 
 interface PageCardProps {
   page: Page;
@@ -747,8 +752,13 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceSelectionRef = useRef<VoiceSelectionSnapshot | null>(null);
   const voicePinnedSelectionRef = useRef<VoiceSelectionSnapshot | null>(null);
-  const dictatedFeedbackPasteSelectionRef =
-    useRef<VoiceSelectionSnapshot | null>(null);
+  const [dictatedFeedbackCapture, setDictatedFeedbackCapture] =
+    useState<DictatedFeedbackCapture | null>(null);
+  const dictatedFeedbackCaptureRef = useRef<DictatedFeedbackCapture | null>(
+    null,
+  );
+  const dictatedFeedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const dictatedFeedbackInputTimerRef = useRef<number | null>(null);
   const shouldRecordVoiceRef = useRef(false);
   const voiceAppendTargetBySelectionRef = useRef<Map<string, string>>(
     new Map(),
@@ -873,6 +883,21 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     return `${selection.from}:${selection.to}:${selection.selectedText}`;
   }, []);
 
+  const clearDictatedFeedbackInputTimer = useCallback(() => {
+    if (dictatedFeedbackInputTimerRef.current == null) return;
+    window.clearTimeout(dictatedFeedbackInputTimerRef.current);
+    dictatedFeedbackInputTimerRef.current = null;
+  }, []);
+
+  const clearDictatedFeedbackCapture = useCallback(() => {
+    clearDictatedFeedbackInputTimer();
+    dictatedFeedbackCaptureRef.current = null;
+    setDictatedFeedbackCapture(null);
+    if (dictatedFeedbackInputRef.current) {
+      dictatedFeedbackInputRef.current.value = "";
+    }
+  }, [clearDictatedFeedbackInputTimer]);
+
   const refreshCriticChanges = useCallback(() => {
     if (criticChangeFrameRef.current != null) {
       cancelAnimationFrame(criticChangeFrameRef.current);
@@ -922,19 +947,19 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             return true;
           }
 
-          const dictatedFeedbackSelection =
-            dictatedFeedbackPasteSelectionRef.current;
+          const dictatedFeedbackCaptureState =
+            dictatedFeedbackCaptureRef.current;
           const dictatedFeedbackText = event.clipboardData
             ?.getData("text/plain")
             ?.trim();
           if (
-            dictatedFeedbackSelection &&
+            dictatedFeedbackCaptureState &&
             dictatedFeedbackText &&
             interactionModeRef.current !== "viewing"
           ) {
             event.preventDefault();
-            dictatedFeedbackPasteSelectionRef.current = null;
-            const runId = ++voiceProgressRunRef.current;
+            clearDictatedFeedbackCapture();
+            const { runId, selection } = dictatedFeedbackCaptureState;
             setVoiceStatus("processing");
             setVoiceStatusMessage("");
             setVoiceProgress({
@@ -945,7 +970,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             void processVoiceUtteranceRef.current(
               dictatedFeedbackText,
               runId,
-              dictatedFeedbackSelection,
+              selection,
             );
             return true;
           }
@@ -1492,6 +1517,58 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     processVoiceUtteranceRef.current = processVoiceUtterance;
   }, [processVoiceUtterance]);
 
+  const processDictatedFeedbackText = useCallback(
+    (utterance: string) => {
+      const capture = dictatedFeedbackCaptureRef.current;
+      const normalizedUtterance = utterance.trim();
+      if (!capture || !normalizedUtterance) return;
+
+      clearDictatedFeedbackCapture();
+      setVoiceStatus("processing");
+      setVoiceStatusMessage("");
+      setVoiceProgress({
+        runId: capture.runId,
+        stage: "processing",
+        message: "Processing feedback...",
+      });
+      void processVoiceUtteranceRef.current(
+        normalizedUtterance,
+        capture.runId,
+        capture.selection,
+      );
+    },
+    [clearDictatedFeedbackCapture],
+  );
+
+  const queueDictatedFeedbackText = useCallback(
+    (utterance: string) => {
+      const capture = dictatedFeedbackCaptureRef.current;
+      if (!capture || !utterance.trim()) return;
+
+      clearDictatedFeedbackInputTimer();
+      dictatedFeedbackInputTimerRef.current = window.setTimeout(() => {
+        dictatedFeedbackInputTimerRef.current = null;
+        processDictatedFeedbackText(utterance);
+      }, 300);
+    },
+    [clearDictatedFeedbackInputTimer, processDictatedFeedbackText],
+  );
+
+  useEffect(() => {
+    return () => {
+      clearDictatedFeedbackInputTimer();
+    };
+  }, [clearDictatedFeedbackInputTimer]);
+
+  useEffect(() => {
+    if (!dictatedFeedbackCapture) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      dictatedFeedbackInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [dictatedFeedbackCapture]);
+
   const flushRecordedAudio = useCallback(
     async (
       chunks: Blob[],
@@ -1624,54 +1701,60 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     [processVoiceUtterance],
   );
 
-  const stopVoiceCapture = useCallback((cancel = false) => {
-    shouldRecordVoiceRef.current = false;
-    const recorder = mediaRecorderRef.current;
-    const captureContext = voiceCaptureContextRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      if (cancel && captureContext) {
-        captureContext.shouldTranscribe = false;
-      }
-      const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
-      if (captureContext && !cancel) {
-        const elapsedMs = Date.now() - captureContext.startedAtMs;
-        if (elapsedMs < 450) {
+  const stopVoiceCapture = useCallback(
+    (cancel = false) => {
+      shouldRecordVoiceRef.current = false;
+      const recorder = mediaRecorderRef.current;
+      const captureContext = voiceCaptureContextRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        if (cancel && captureContext) {
           captureContext.shouldTranscribe = false;
-          setVoiceProgress({
-            runId,
-            stage: "done",
-            message: "No speech detected.",
-          });
-          window.setTimeout(() => {
-            setVoiceProgress((current) =>
-              current?.runId === runId ? null : current,
-            );
-          }, 900);
-        } else {
-          setVoiceProgress({
-            runId,
-            stage: "transcribing",
-            message: "Transcribing audio...",
-          });
         }
+        const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
+        if (captureContext && !cancel) {
+          const elapsedMs = Date.now() - captureContext.startedAtMs;
+          if (elapsedMs < 450) {
+            captureContext.shouldTranscribe = false;
+            setVoiceProgress({
+              runId,
+              stage: "done",
+              message: "No speech detected.",
+            });
+            window.setTimeout(() => {
+              setVoiceProgress((current) =>
+                current?.runId === runId ? null : current,
+              );
+            }, 900);
+          } else {
+            setVoiceProgress({
+              runId,
+              stage: "transcribing",
+              message: "Transcribing audio...",
+            });
+          }
+        }
+        if (cancel) {
+          setVoiceProgress(null);
+        }
+        recorder.requestData();
+        recorder.stop();
       }
+      mediaRecorderRef.current = null;
+      voiceCaptureContextRef.current = null;
+      if (mediaStreamRef.current) {
+        for (const track of mediaStreamRef.current.getTracks()) {
+          track.stop();
+        }
+        mediaStreamRef.current = null;
+      }
+      voicePinnedSelectionRef.current = null;
       if (cancel) {
-        setVoiceProgress(null);
+        clearDictatedFeedbackCapture();
       }
-      recorder.requestData();
-      recorder.stop();
-    }
-    mediaRecorderRef.current = null;
-    voiceCaptureContextRef.current = null;
-    if (mediaStreamRef.current) {
-      for (const track of mediaStreamRef.current.getTracks()) {
-        track.stop();
-      }
-      mediaStreamRef.current = null;
-    }
-    voicePinnedSelectionRef.current = null;
-    setVoiceStatus("idle");
-  }, []);
+      setVoiceStatus("idle");
+    },
+    [clearDictatedFeedbackCapture],
+  );
 
   const handleDictateFeedback = useCallback(() => {
     const currentEditor = editorRef.current;
@@ -1682,15 +1765,17 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     stopVoiceCapture(true);
     voiceSelectionRef.current = snapshot;
     voicePinnedSelectionRef.current = snapshot;
-    dictatedFeedbackPasteSelectionRef.current = snapshot;
     shouldRecordVoiceRef.current = false;
     const runId = ++voiceProgressRunRef.current;
+    const capture = { runId, selection: snapshot };
+    dictatedFeedbackCaptureRef.current = capture;
+    setDictatedFeedbackCapture(capture);
     setVoiceStatus("paused");
-    setVoiceStatusMessage("Waiting for pasted transcript");
+    setVoiceStatusMessage("Listening with Hex");
     setVoiceProgress({
       runId,
-      stage: "waiting",
-      message: "Paste dictated feedback.",
+      stage: "listening",
+      message: "Listening with Hex...",
     });
   }, [getSelectionSnapshot, stopVoiceCapture]);
 
@@ -1776,7 +1861,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       if (!currentEditor) return;
       const snapshot = getSelectionSnapshot(currentEditor);
       if (!snapshot) {
-        dictatedFeedbackPasteSelectionRef.current = null;
+        clearDictatedFeedbackCapture();
         voiceSelectionRef.current = null;
         shouldRecordVoiceRef.current = false;
         setVoiceStatus("paused");
@@ -1821,17 +1906,17 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
 
       voiceSelectionRef.current = snapshot;
       voicePinnedSelectionRef.current = snapshot;
-      const dictatedFeedbackSelection =
-        dictatedFeedbackPasteSelectionRef.current;
+      const dictatedFeedbackSelection = dictatedFeedbackCaptureRef.current;
       if (dictatedFeedbackSelection) {
         if (
-          selectionKey(dictatedFeedbackSelection) === selectionKey(snapshot)
+          selectionKey(dictatedFeedbackSelection.selection) ===
+          selectionKey(snapshot)
         ) {
           shouldRecordVoiceRef.current = false;
           setVoiceStatus("paused");
           return;
         }
-        dictatedFeedbackPasteSelectionRef.current = null;
+        clearDictatedFeedbackCapture();
       }
       if (voiceCaptureContextRef.current) {
         voiceCaptureContextRef.current.selection = snapshot;
@@ -1848,6 +1933,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       editor.off("selectionUpdate", handleSelectionChange);
     };
   }, [
+    clearDictatedFeedbackCapture,
     editor,
     ensureVoiceCapture,
     getSelectionSnapshot,
@@ -2744,6 +2830,17 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
                     {voiceProgress.stage}
                   </div>
                 </div>
+              ) : null}
+              {dictatedFeedbackCapture ? (
+                <textarea
+                  ref={dictatedFeedbackInputRef}
+                  data-testid="dictated-feedback-capture"
+                  aria-label="Dictated feedback capture"
+                  className="fixed bottom-0 left-0 size-px resize-none opacity-0"
+                  onInput={(event) => {
+                    queueDictatedFeedbackText(event.currentTarget.value);
+                  }}
+                />
               ) : null}
               <EditorContextMenu
                 editor={editor}
