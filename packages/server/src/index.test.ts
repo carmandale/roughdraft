@@ -394,6 +394,7 @@ describe("createApp", () => {
       path: "draft.md",
       timeoutSeconds: 1,
       batchWindowSeconds: 0,
+      source: "test-one-shot",
     });
     const waitingPromise = waiting.then((response) => response);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -407,6 +408,14 @@ describe("createApp", () => {
       watching: true,
       watcherCount: 1,
       documentPath: path.join(projectDir, "draft.md"),
+      watchers: [
+        {
+          source: "test-one-shot",
+          state: "waiting",
+          documentPath: path.join(projectDir, "draft.md"),
+          lastDeliveredAt: null,
+        },
+      ],
     });
 
     await request(app)

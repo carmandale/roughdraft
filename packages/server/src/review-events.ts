@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -6,6 +7,11 @@ export interface ReviewCompletedEventInput {
   projectPath: string;
   relativePath: string;
   version: string;
+  handoffId?: string;
+  roundId?: string;
+  runIds?: string[];
+  savedVersion?: string;
+  handoffAt?: string;
   summary: {
     comments: number;
     replies: number;
@@ -25,6 +31,7 @@ export interface WaitForReviewEventsOptions {
   afterSequence?: number;
   timeoutMs?: number;
   batchWindowMs?: number;
+  source?: string;
 }
 
 export interface WaitForReviewEventsResult {
@@ -38,32 +45,93 @@ interface Waiter {
   resolve: (result: WaitForReviewEventsResult) => void;
   timeout: NodeJS.Timeout | null;
   batchTimeout: NodeJS.Timeout | null;
+  session: ReviewWatcherSession;
+}
+
+export interface ReviewWatcherSession {
+  sessionId: string;
+  source: string;
+  documentPath: string | null;
+  startedAt: string;
+  lastDeliveredAt: string | null;
+  state: "waiting" | "delivered" | "stopped";
+}
+
+export interface ReviewEventDelivery {
+  state: "delivered" | "no_watcher";
+  watchers: ReviewWatcherSession[];
+}
+
+export interface ReviewEventEmitResult {
+  delivered: boolean;
+  event: ReviewCompletedEvent;
+  delivery: ReviewEventDelivery;
+}
+
+export interface ReviewFollowPayload {
+  type: "review.completed";
+  event: ReviewCompletedEvent;
+  watcher: ReviewWatcherSession;
+  deliveryState: "delivered";
+}
+
+export interface FollowReviewEventsOptions {
+  documentPath?: string;
+  source?: string;
+}
+
+export interface FollowReviewEventsSession {
+  session: ReviewWatcherSession;
+  stop: () => void;
+}
+
+interface FollowWatcher {
+  options: NormalizedFollowOptions;
+  session: ReviewWatcherSession;
+  onEvent: (payload: ReviewFollowPayload) => void;
 }
 
 const DEFAULT_BATCH_WINDOW_MS = 250;
 const MAX_RETAINED_EVENTS = 100;
 
 type NormalizedWaitOptions = Required<
-  Omit<WaitForReviewEventsOptions, "documentPath" | "timeoutMs">
+  Omit<WaitForReviewEventsOptions, "documentPath" | "timeoutMs" | "source">
 > & {
   documentPath?: string;
   timeoutMs?: number;
+  source: string;
 };
+
+type NormalizedFollowOptions = {
+  documentPath?: string;
+  source: string;
+};
+
+interface ReviewEventQueueOptions {
+  idFactory?: () => string;
+  now?: () => number;
+}
 
 export class ReviewEventQueue {
   private events: ReviewCompletedEvent[] = [];
   private waiters = new Set<Waiter>();
+  private followWatchers = new Map<string, FollowWatcher>();
   private nextSequence = 1;
+  private readonly idFactory: () => string;
+  private readonly now: () => number;
 
-  emit(input: ReviewCompletedEventInput): {
-    delivered: boolean;
-    event: ReviewCompletedEvent;
-  } {
+  constructor(options: ReviewEventQueueOptions = {}) {
+    this.idFactory = options.idFactory ?? cryptoRandomId;
+    this.now = options.now ?? Date.now;
+  }
+
+  emit(input: ReviewCompletedEventInput): ReviewEventEmitResult {
+    const deliveredWatchers: ReviewWatcherSession[] = [];
     const event: ReviewCompletedEvent = {
       ...input,
       type: "review.completed",
       sequence: this.nextSequence,
-      createdAt: new Date().toISOString(),
+      createdAt: this.isoNow(),
     };
     this.nextSequence += 1;
     this.events.push(event);
@@ -79,11 +147,34 @@ export class ReviewEventQueue {
     for (const waiter of [...this.waiters]) {
       if (matchesWaiter(event, waiter.options)) {
         delivered = true;
+        markDelivered(waiter.session, this.isoNow());
+        deliveredWatchers.push(cloneSession(waiter.session));
         this.scheduleResolve(waiter);
       }
     }
 
-    return { delivered, event };
+    for (const watcher of this.followWatchers.values()) {
+      if (!matchesFollowWatcher(event, watcher.options)) continue;
+      delivered = true;
+      markDelivered(watcher.session, this.isoNow());
+      const watcherSession = cloneSession(watcher.session);
+      deliveredWatchers.push(watcherSession);
+      watcher.onEvent({
+        type: "review.completed",
+        event,
+        watcher: watcherSession,
+        deliveryState: "delivered",
+      });
+    }
+
+    return {
+      delivered,
+      event,
+      delivery: {
+        state: delivered ? "delivered" : "no_watcher",
+        watchers: deliveredWatchers,
+      },
+    };
   }
 
   wait(
@@ -103,6 +194,7 @@ export class ReviewEventQueue {
         options: normalized,
         resolve,
         batchTimeout: null,
+        session: this.createSession(normalized),
         timeout:
           normalized.timeoutMs !== undefined
             ? setTimeout(() => {
@@ -120,8 +212,33 @@ export class ReviewEventQueue {
     });
   }
 
+  follow(
+    options: FollowReviewEventsOptions,
+    onEvent: (payload: ReviewFollowPayload) => void,
+  ): FollowReviewEventsSession {
+    const normalized = normalizeFollowOptions(options);
+    const session = this.createSession(normalized);
+    const watcher: FollowWatcher = {
+      options: normalized,
+      session,
+      onEvent,
+    };
+    this.followWatchers.set(session.sessionId, watcher);
+    appendSlog("review-events.follow", {
+      documentPath: normalized.documentPath ?? null,
+      sessionId: session.sessionId,
+      source: session.source,
+    });
+    return {
+      session: cloneSession(session),
+      stop: () => {
+        this.stopFollow(session.sessionId);
+      },
+    };
+  }
+
   waiterCount(): number {
-    return this.waiters.size;
+    return this.waiters.size + this.followWatchers.size;
   }
 
   latestSequence(): number {
@@ -130,9 +247,23 @@ export class ReviewEventQueue {
 
   waiterCountForDocument(documentPath: string): number {
     const normalizedPath = path.resolve(documentPath);
-    return [...this.waiters].filter(
-      (waiter) => waiter.options.documentPath === normalizedPath,
-    ).length;
+    return this.watchersForDocument(normalizedPath).length;
+  }
+
+  statusForDocument(documentPath: string): {
+    documentPath: string;
+    watching: boolean;
+    watcherCount: number;
+    watchers: ReviewWatcherSession[];
+  } {
+    const normalizedPath = path.resolve(documentPath);
+    const watchers = this.watchersForDocument(normalizedPath);
+    return {
+      documentPath: normalizedPath,
+      watching: watchers.length > 0,
+      watcherCount: watchers.length,
+      watchers,
+    };
   }
 
   private matchingEvents(
@@ -166,7 +297,43 @@ export class ReviewEventQueue {
     }
 
     const events = timedOut ? [] : this.matchingEvents(waiter.options);
+    waiter.session.state = timedOut ? "stopped" : "delivered";
     waiter.resolve(resultForEvents(events, timedOut, this.nextSequence));
+  }
+
+  private createSession(options: {
+    documentPath?: string;
+    source: string;
+  }): ReviewWatcherSession {
+    return {
+      sessionId: this.idFactory(),
+      source: options.source,
+      documentPath: options.documentPath ?? null,
+      startedAt: this.isoNow(),
+      lastDeliveredAt: null,
+      state: "waiting",
+    };
+  }
+
+  private isoNow(): string {
+    return new Date(this.now()).toISOString();
+  }
+
+  private stopFollow(sessionId: string): void {
+    const watcher = this.followWatchers.get(sessionId);
+    if (!watcher) return;
+    watcher.session.state = "stopped";
+    this.followWatchers.delete(sessionId);
+  }
+
+  private watchersForDocument(documentPath: string): ReviewWatcherSession[] {
+    const waiting = [...this.waiters]
+      .filter((waiter) => waiter.options.documentPath === documentPath)
+      .map((waiter) => cloneSession(waiter.session));
+    const following = [...this.followWatchers.values()]
+      .filter((watcher) => watcher.options.documentPath === documentPath)
+      .map((watcher) => cloneSession(watcher.session));
+    return [...waiting, ...following];
   }
 }
 
@@ -178,6 +345,7 @@ function normalizeWaitOptions(
       ? path.resolve(options.documentPath)
       : undefined,
     afterSequence: Math.max(0, options.afterSequence ?? 0),
+    source: normalizeSource(options.source, "one-shot"),
     timeoutMs:
       options.timeoutMs !== undefined
         ? clamp(options.timeoutMs, 0, 300_000)
@@ -190,6 +358,17 @@ function normalizeWaitOptions(
   };
 }
 
+function normalizeFollowOptions(
+  options: FollowReviewEventsOptions,
+): NormalizedFollowOptions {
+  return {
+    documentPath: options.documentPath
+      ? path.resolve(options.documentPath)
+      : undefined,
+    source: normalizeSource(options.source, "follow"),
+  };
+}
+
 function matchesWaiter(
   event: ReviewCompletedEvent,
   options: NormalizedWaitOptions,
@@ -197,6 +376,32 @@ function matchesWaiter(
   if (event.sequence <= options.afterSequence) return false;
   if (!options.documentPath) return true;
   return path.resolve(event.documentPath) === options.documentPath;
+}
+
+function matchesFollowWatcher(
+  event: ReviewCompletedEvent,
+  options: NormalizedFollowOptions,
+): boolean {
+  if (!options.documentPath) return true;
+  return path.resolve(event.documentPath) === options.documentPath;
+}
+
+function markDelivered(session: ReviewWatcherSession, at: string): void {
+  session.lastDeliveredAt = at;
+  session.state = "delivered";
+}
+
+function cloneSession(session: ReviewWatcherSession): ReviewWatcherSession {
+  return { ...session };
+}
+
+function normalizeSource(source: string | undefined, fallback: string): string {
+  const trimmed = source?.trim();
+  return trimmed ? trimmed.slice(0, 80) : fallback;
+}
+
+function cryptoRandomId(): string {
+  return crypto.randomUUID();
 }
 
 function resultForEvents(

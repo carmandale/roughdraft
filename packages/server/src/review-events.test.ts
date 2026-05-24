@@ -51,6 +51,11 @@ describe("ReviewEventQueue", () => {
       events: [emitted.event],
     });
     expect(emitted.delivered).toBe(true);
+    expect(emitted.delivery.watchers[0]).toMatchObject({
+      source: "one-shot",
+      state: "delivered",
+      documentPath: "/tmp/project/draft.md",
+    });
     vi.useRealTimers();
   });
 
@@ -147,5 +152,61 @@ describe("ReviewEventQueue", () => {
     expect(result.events).toHaveLength(100);
     expect(result.events[0]?.sequence).toBe(6);
     expect(result.events.at(-1)?.sequence).toBe(105);
+  });
+
+  it("keeps a follow watcher registered across rapid matching events", () => {
+    let id = 0;
+    let now = Date.parse("2026-05-24T14:00:00.000Z");
+    const queue = new ReviewEventQueue({
+      idFactory: () => `watcher-${++id}`,
+      now: () => now,
+    });
+    const delivered: unknown[] = [];
+
+    const follow = queue.follow(
+      { documentPath: "/tmp/project/draft.md", source: "test-follow" },
+      (payload) => delivered.push(payload),
+    );
+
+    const first = queue.emit(eventInput("/tmp/project/draft.md"));
+    now += 1;
+    const second = queue.emit(eventInput("/tmp/project/draft.md"));
+
+    expect(first.delivered).toBe(true);
+    expect(second.delivered).toBe(true);
+    expect(delivered).toHaveLength(2);
+    expect(delivered).toEqual([
+      expect.objectContaining({
+        deliveryState: "delivered",
+        watcher: expect.objectContaining({
+          sessionId: "watcher-1",
+          source: "test-follow",
+          lastDeliveredAt: "2026-05-24T14:00:00.000Z",
+        }),
+      }),
+      expect.objectContaining({
+        deliveryState: "delivered",
+        watcher: expect.objectContaining({
+          sessionId: "watcher-1",
+          source: "test-follow",
+          lastDeliveredAt: "2026-05-24T14:00:00.001Z",
+        }),
+      }),
+    ]);
+    expect(queue.statusForDocument("/tmp/project/draft.md")).toMatchObject({
+      watching: true,
+      watcherCount: 1,
+      watchers: [
+        {
+          sessionId: "watcher-1",
+          source: "test-follow",
+          state: "delivered",
+          lastDeliveredAt: "2026-05-24T14:00:00.001Z",
+        },
+      ],
+    });
+
+    follow.stop();
+    expect(queue.waiterCountForDocument("/tmp/project/draft.md")).toBe(0);
   });
 });

@@ -14,7 +14,7 @@ interface JsonRpcRequest {
   params?: unknown;
 }
 
-interface ToolDefinition {
+export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -29,7 +29,7 @@ interface McpOptions {
 
 const protocolVersion = "2025-06-18";
 
-const tools: ToolDefinition[] = [
+export const tools: ToolDefinition[] = [
   {
     name: "roughdraft_get_open_documents",
     description:
@@ -69,7 +69,7 @@ const tools: ToolDefinition[] = [
   {
     name: "roughdraft_watch_review_events",
     description:
-      "Block until Roughdraft receives Done Reviewing for a Markdown file. Omit timeoutSeconds to wait indefinitely.",
+      "One-shot watch: block until Roughdraft receives the next Done Reviewing event for a Markdown file. This MCP tool does not keep the live voice review loop rearmed; use `roughdraft watch --follow --json` for continuous follow mode.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -277,6 +277,7 @@ export async function callTool(
       timeoutSeconds?: number;
       batchWindowSeconds: number;
       fromNow: boolean;
+      source: string;
     } = {
       projectPath,
       path: path.relative(projectPath, documentPath),
@@ -285,6 +286,7 @@ export async function callTool(
           ? args.batchWindowSeconds
           : 0.25,
       fromNow: true,
+      source: "mcp-one-shot",
     };
     if (typeof args.timeoutSeconds === "number") {
       body.timeoutSeconds = args.timeoutSeconds;

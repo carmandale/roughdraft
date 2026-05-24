@@ -19,12 +19,12 @@ bead: bd-1ny1
 
 ## Group B: Watcher Follow And Provenance
 
-- [ ] T6: Add failing queue/server tests for watcher sessions: intended watcher provenance, stale/test watcher visibility, aggregate status with session details, and delivery to a registered follow watcher.
-- [ ] T7: Extend the review-event queue or adjacent watcher registry so follow watcher sessions remain registered across deliveries until explicit stop, timeout, abort, or server cleanup.
-- [ ] T8: Extend `review.completed` event payloads and status responses with handoff id, round id, run ids, saved version, handoff timestamp, watcher session id/source/startedAt/lastDeliveredAt, and truthful delivery state.
-- [ ] T9: Add `roughdraft watch --follow --json` tests for two rapid Done Reviewing events on the same document without restarting and without losing delivery provenance.
-- [ ] T10: Implement `roughdraft watch --follow --json` as newline-delimited JSON follow mode, preserving existing one-shot `watch` and `open` behavior unless explicitly changed with tests.
-- [ ] T11: Update MCP tool description, help, and tests to either expose equivalent follow semantics or explicitly label MCP review watching as one-shot/out-of-scope for the live voice loop.
+- [x] T6: Add failing queue/server tests for watcher sessions: intended watcher provenance, stale/test watcher visibility, aggregate status with session details, and delivery to a registered follow watcher.
+- [x] T7: Extend the review-event queue or adjacent watcher registry so follow watcher sessions remain registered across deliveries until explicit stop, timeout, abort, or server cleanup.
+- [x] T8: Extend `review.completed` event payloads and status responses with handoff id, round id, run ids, saved version, handoff timestamp, watcher session id/source/startedAt/lastDeliveredAt, and truthful delivery state.
+- [x] T9: Add `roughdraft watch --follow --json` tests for two rapid Done Reviewing events on the same document without restarting and without losing delivery provenance.
+- [x] T10: Implement `roughdraft watch --follow --json` as newline-delimited JSON follow mode, preserving existing one-shot `watch` and `open` behavior unless explicitly changed with tests.
+- [x] T11: Update MCP tool description, help, and tests to either expose equivalent follow semantics or explicitly label MCP review watching as one-shot/out-of-scope for the live voice loop.
 
 ## Group C: App Timeline And Save-Before-Handoff
 

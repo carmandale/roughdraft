@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { callTool } from "./mcp";
+import { callTool, tools } from "./mcp";
 
 describe("mcp", () => {
   let tempDir: string;
@@ -56,11 +56,21 @@ describe("mcp", () => {
       path: "draft.md",
       batchWindowSeconds: 0.25,
       fromNow: true,
+      source: "mcp-one-shot",
     });
     expect(requestBodies[0]).not.toHaveProperty("timeoutSeconds");
     expect(requestBodies[1]).toMatchObject({
       timeoutSeconds: 5,
     });
+  });
+
+  it("labels MCP review watching as one-shot rather than live-loop follow", () => {
+    const tool = tools.find(
+      (candidate) => candidate.name === "roughdraft_watch_review_events",
+    );
+
+    expect(tool?.description).toContain("One-shot watch");
+    expect(tool?.description).toContain("roughdraft watch --follow --json");
   });
 
   it("does not write a reply when the message contains a CriticMarkup close delimiter", async () => {

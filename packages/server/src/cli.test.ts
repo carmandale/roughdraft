@@ -859,6 +859,82 @@ describe("cli", () => {
     });
   });
 
+  it("keeps watch --follow --json attached for two rapid review events", async () => {
+    const test = createTestDependencies();
+    const documentPath = path.join(projectDir, "draft.md");
+    fs.writeFileSync(documentPath, "# Draft\n");
+
+    const watchPromise = runCli(
+      [
+        "watch",
+        documentPath,
+        "--follow",
+        "--json",
+        "--timeout",
+        "0.5",
+        "--batch-window",
+        "0",
+      ],
+      test.deps,
+    );
+
+    let persisted: { port: number } | null = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const stateFile = getServerStateFilePath(test.deps.env);
+      if (fs.existsSync(stateFile)) {
+        persisted = JSON.parse(fs.readFileSync(stateFile, "utf8")) as {
+          port: number;
+        };
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(persisted).not.toBeNull();
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await fetch(
+        `http://localhost:${persisted?.port}/api/review-events/status?projectPath=${encodeURIComponent(projectDir)}&path=draft.md`,
+      ).then((response) => response.json() as Promise<{ watcherCount: number }>);
+      if (status.watcherCount > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    await fetch(`http://localhost:${persisted?.port}/api/review-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectPath: projectDir, path: "draft.md" }),
+    });
+    await fetch(`http://localhost:${persisted?.port}/api/review-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectPath: projectDir, path: "draft.md" }),
+    });
+
+    const exitCode = await watchPromise;
+    const events = test.logs.map((line) =>
+      JSON.parse(line) as {
+        deliveryState: string;
+        event: { sequence: number; type: string; documentPath: string };
+        watcher: { sessionId: string; source: string };
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.event.sequence)).toEqual([1, 2]);
+    expect(new Set(events.map((event) => event.watcher.sessionId)).size).toBe(1);
+    expect(events[0]).toMatchObject({
+      deliveryState: "delivered",
+      event: {
+        type: "review.completed",
+        documentPath,
+      },
+      watcher: {
+        source: "cli-follow",
+      },
+    });
+  });
+
   it("opens a document and waits for the next review event by default from open --json", async () => {
     const test = createTestDependencies();
     const documentPath = path.join(projectDir, "draft.md");

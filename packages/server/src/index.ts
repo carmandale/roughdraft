@@ -1118,6 +1118,8 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
         : 0.25;
     const afterSequence =
       typeof req.body?.afterSequence === "number" ? req.body.afterSequence : 0;
+    const source =
+      typeof req.body?.source === "string" ? req.body.source : "cli-watch";
 
     const result = await reviewEvents.wait({
       documentPath: target.absolutePath,
@@ -1125,24 +1127,73 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
       timeoutMs:
         timeoutSeconds !== undefined ? timeoutSeconds * 1000 : undefined,
       batchWindowMs: batchWindowSeconds * 1000,
+      source,
     });
 
     res.json(result);
+  });
+
+  app.post("/api/review-events/follow", (req, res) => {
+    const target = markdownPathFromRequest(req, res);
+    if (!target) return;
+
+    const timeoutSeconds =
+      typeof req.body?.timeoutSeconds === "number"
+        ? req.body.timeoutSeconds
+        : undefined;
+    const source =
+      typeof req.body?.source === "string" ? req.body.source : "cli-follow";
+
+    res.status(200);
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.flushHeaders?.();
+
+    const follow = reviewEvents.follow(
+      {
+        documentPath: target.absolutePath,
+        source,
+      },
+      (payload) => {
+        res.write(`${JSON.stringify(payload)}\n`);
+      },
+    );
+
+    let timeout: NodeJS.Timeout | null = null;
+    const stop = () => {
+      follow.stop();
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+    };
+
+    if (timeoutSeconds !== undefined) {
+      timeout = setTimeout(() => {
+        stop();
+        res.end();
+      }, timeoutSeconds * 1000);
+    }
+
+    res.on("close", stop);
+    req.on("aborted", () => {
+      stop();
+      res.end();
+    });
   });
 
   app.get("/api/review-events/status", (req, res) => {
     const target = markdownPathFromRequest(req, res);
     if (!target) return;
 
-    const watcherCount = reviewEvents.waiterCountForDocument(
-      target.absolutePath,
-    );
+    const status = reviewEvents.statusForDocument(target.absolutePath);
     res.json({
       documentPath: target.absolutePath,
       projectPath: target.projectDir,
       relativePath: target.relativePath,
-      watching: watcherCount > 0,
-      watcherCount,
+      watching: status.watching,
+      watcherCount: status.watcherCount,
+      watchers: status.watchers,
     });
   });
 
@@ -1276,6 +1327,11 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
         projectPath: target.projectDir,
         relativePath: target.relativePath,
         version: handoff.savedVersion,
+        handoffId: handoff.handoffId,
+        roundId: handoff.roundId,
+        runIds: handoff.runIds,
+        savedVersion: handoff.savedVersion,
+        handoffAt: handoff.handoffAt,
         summary: index.summary,
       });
       res.status(201).json({ handoff, reviewEvent: result });

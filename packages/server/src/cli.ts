@@ -161,6 +161,7 @@ interface ParsedCommandOptions {
 
 interface ParsedWatchOptions {
   batchWindowSeconds: number;
+  follow: boolean;
   help: boolean;
   json: boolean;
   positionals: string[];
@@ -440,6 +441,7 @@ function applyCliEnvOverrides(
 function parseWatchOptions(args: string[]): ParsedWatchOptions {
   const parsed: ParsedWatchOptions = {
     batchWindowSeconds: 0.25,
+    follow: false,
     help: false,
     json: false,
     positionals: [],
@@ -461,6 +463,11 @@ function parseWatchOptions(args: string[]): ParsedWatchOptions {
 
     if (arg === "--json") {
       parsed.json = true;
+      continue;
+    }
+
+    if (arg === "--follow") {
+      parsed.follow = true;
       continue;
     }
 
@@ -795,6 +802,7 @@ function printHelp(log: (message: string) => void) {
   log("  roughdraft open ./draft.md --json");
   log("  roughdraft open ./draft.md --no-watch");
   log("  roughdraft watch ./draft.md --json");
+  log("  roughdraft watch ./draft.md --follow --json");
   log("  roughdraft status --json");
   log("");
   log(`Agent setup: ${AGENT_SETUP_URL}`);
@@ -897,7 +905,7 @@ function printCommandHelp(
 
   if (command === "watch") {
     log("Usage:");
-    log("  roughdraft watch <path> [--json] [--timeout <seconds>]");
+    log("  roughdraft watch <path> [--json] [--timeout <seconds>] [--follow]");
     log("");
     log(
       "Waits until Roughdraft receives Done Reviewing for one Markdown file.",
@@ -905,6 +913,9 @@ function printCommandHelp(
     log("");
     log("Flags:");
     log("  --json                    Print machine-readable output");
+    log(
+      "  --follow                  Keep watching and print newline-delimited JSON events",
+    );
     log(
       "  --timeout <seconds>       Maximum wait time; omitted means no timeout",
     );
@@ -2067,14 +2078,20 @@ async function runWatch(
     timeoutSeconds?: number;
     batchWindowSeconds: number;
     fromNow: boolean;
+    source: string;
   } = {
     projectPath: target.projectDir,
     path: relativePath,
     batchWindowSeconds: options.batchWindowSeconds,
     fromNow: !options.replay,
+    source: options.follow ? "cli-follow" : "cli-watch",
   };
   if (options.timeoutSeconds !== undefined) {
     body.timeoutSeconds = options.timeoutSeconds;
+  }
+
+  if (options.follow) {
+    return runWatchFollow(deps, target, serverUrl, body, options, json);
   }
 
   const response = await deps.fetchImpl(
@@ -2112,6 +2129,81 @@ async function runWatch(
   deps.log(`Review completed for ${target.openPath}.`);
   deps.log(`Received ${(payload.events ?? []).length} event(s).`);
   return 0;
+}
+
+async function runWatchFollow(
+  deps: CliDependencies,
+  target: ResolvedTargetPath,
+  serverUrl: string,
+  body: {
+    projectPath: string;
+    path: string;
+    timeoutSeconds?: number;
+    batchWindowSeconds: number;
+    fromNow: boolean;
+    source: string;
+  },
+  options: ParsedWatchOptions,
+  json: boolean,
+): Promise<number> {
+  const response = await deps.fetchImpl(
+    new URL("/api/review-events/follow", serverUrl),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      ...(options.timeoutSeconds !== undefined
+        ? { signal: AbortSignal.timeout((options.timeoutSeconds + 5) * 1000) }
+        : {}),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to follow review events: ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("Review event follow response did not include a body.");
+  }
+
+  let received = 0;
+  let buffer = "";
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        received += 1;
+        if (json) {
+          deps.log(trimmed);
+        } else {
+          const payload = JSON.parse(trimmed) as {
+            event?: { documentPath?: string };
+            watcher?: { sessionId?: string };
+          };
+          deps.log(
+            `Review completed for ${payload.event?.documentPath ?? target.openPath}.`,
+          );
+          deps.log(`Watcher session: ${payload.watcher?.sessionId ?? "unknown"}.`);
+        }
+      }
+    }
+    if (done) break;
+  }
+
+  if (buffer.trim()) {
+    received += 1;
+    if (json) {
+      deps.log(buffer.trim());
+    }
+  }
+
+  return received > 0 ? 0 : 1;
 }
 
 function isMarkdownPath(targetPath: string): boolean {
@@ -2732,6 +2824,7 @@ export async function runCli(
 
         const watchOptions: ParsedWatchOptions = {
           batchWindowSeconds: options.batchWindowSeconds,
+          follow: false,
           help: false,
           json,
           positionals: [target],
