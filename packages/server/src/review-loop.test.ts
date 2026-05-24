@@ -47,8 +47,9 @@ describe("ReviewLoopProofHelper", () => {
   });
 
   it("refuses to complete an unsaved review round", () => {
+    let id = 0;
     const helper = new ReviewLoopProofHelper({
-      idFactory: () => "fixed-id",
+      idFactory: () => `id-${++id}`,
     });
     const run = helper.createRun({
       documentPath: "/tmp/project/draft.md",
@@ -59,8 +60,8 @@ describe("ReviewLoopProofHelper", () => {
         selectedText: "selected text",
       },
     });
-    helper.markSavedVersion(run.runId, "v2");
-    helper.createRun({
+    const saved = helper.markSavedVersion(run.runId, "v2");
+    const secondRun = helper.createRun({
       documentPath: "/tmp/project/draft.md",
       projectPath: "/tmp/project",
       relativePath: "draft.md",
@@ -69,8 +70,11 @@ describe("ReviewLoopProofHelper", () => {
         selectedText: "another selection",
       },
     });
+    helper.recordMilestone(secondRun.runId, "save_started");
 
-    expect(() => helper.completeRound("/tmp/project/draft.md")).toThrow(
+    expect(() =>
+      helper.completeRound("/tmp/project/draft.md", saved.round.roundId),
+    ).toThrow(
       "review round has unsaved runs",
     );
   });

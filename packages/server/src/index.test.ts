@@ -572,16 +572,44 @@ describe("createApp", () => {
       }),
     ]);
 
+    const saveStartedResponse = await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/milestones`)
+      .send({ milestone: "save_started" });
+    expect(saveStartedResponse.status).toBe(200);
+    expect(saveStartedResponse.body.roundId).toEqual(expect.any(String));
+
+    const forgedSavedResponse = await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/saved-version`)
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        savedVersion: "saved:v2",
+      });
+    expect(forgedSavedResponse.status).toBe(409);
+
+    const saveResponse = await request(app)
+      .put("/api/markdown-file")
+      .query({ projectPath: projectDir, path: "draft.md" })
+      .send({
+        content: "# Draft\n\n{==Target phrase==}{>>spoken review<<}\n",
+        expectedVersion: readResponse.body.version,
+      });
+    expect(saveResponse.status).toBe(200);
+
     const savedResponse = await request(app)
       .post(`/api/review-loop/runs/${runResponse.body.runId}/saved-version`)
-      .send({ savedVersion: "saved:v2" });
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        savedVersion: saveResponse.body.version,
+      });
     expect(savedResponse.status).toBe(200);
     expect(savedResponse.body.run).toMatchObject({
-      savedVersion: "saved:v2",
+      savedVersion: saveResponse.body.version,
       status: "saved",
     });
     expect(savedResponse.body.round).toMatchObject({
-      savedVersion: "saved:v2",
+      savedVersion: saveResponse.body.version,
       status: "open",
       runIds: [runResponse.body.runId],
     });
@@ -595,7 +623,7 @@ describe("createApp", () => {
     expect(statusResponse.status).toBe(200);
     expect(statusResponse.body.openRound).toMatchObject({
       roundId: savedResponse.body.round.roundId,
-      savedVersion: "saved:v2",
+      savedVersion: saveResponse.body.version,
     });
     expect(JSON.stringify(statusResponse.body)).not.toContain("Target phrase");
   });
@@ -610,7 +638,17 @@ describe("createApp", () => {
     const blockedResponse = await request(app)
       .post("/api/review-loop/complete")
       .send({ projectPath: projectDir, path: "draft.md" });
-    expect(blockedResponse.status).toBe(409);
+    expect(blockedResponse.status).toBe(400);
+
+    const readResponse = await request(app).get("/api/markdown-file").query({
+      projectPath: projectDir,
+      path: "draft.md",
+    });
+
+    const noRoundResponse = await request(app)
+      .post("/api/review-loop/complete")
+      .send({ projectPath: projectDir, path: "draft.md", roundId: "missing" });
+    expect(noRoundResponse.status).toBe(409);
 
     const runResponse = await request(app)
       .post("/api/review-loop/runs")
@@ -619,21 +657,52 @@ describe("createApp", () => {
         path: "draft.md",
         selection: { selectedText: "Draft" },
       });
+    const saveStartedResponse = await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/milestones`)
+      .send({ milestone: "save_started" });
+    const roundId = saveStartedResponse.body.roundId;
+
+    const unsavedCompleteResponse = await request(app)
+      .post("/api/review-loop/complete")
+      .send({ projectPath: projectDir, path: "draft.md", roundId });
+    expect(unsavedCompleteResponse.status).toBe(409);
+
+    const saveResponse = await request(app)
+      .put("/api/markdown-file")
+      .query({ projectPath: projectDir, path: "draft.md" })
+      .send({
+        content: "# Draft\n\n{>>Review comment<<}\n",
+        expectedVersion: readResponse.body.version,
+      });
+    expect(saveResponse.status).toBe(200);
+
     await request(app)
       .post(`/api/review-loop/runs/${runResponse.body.runId}/saved-version`)
-      .send({ savedVersion: "saved:v2" })
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        savedVersion: saveResponse.body.version,
+      })
       .expect(200);
+
+    const staleRoundResponse = await request(app)
+      .post("/api/review-loop/complete")
+      .send({ projectPath: projectDir, path: "draft.md", roundId: "stale" });
+    expect(staleRoundResponse.status).toBe(409);
 
     const completedResponse = await request(app)
       .post("/api/review-loop/complete")
-      .send({ projectPath: projectDir, path: "draft.md" });
+      .send({ projectPath: projectDir, path: "draft.md", roundId });
     expect(completedResponse.status).toBe(201);
     expect(completedResponse.body.handoff).toMatchObject({
-      roundId: expect.any(String),
+      roundId,
       runIds: [runResponse.body.runId],
-      savedVersion: "saved:v2",
+      savedVersion: saveResponse.body.version,
     });
     expect(completedResponse.body.reviewEvent.delivered).toBe(false);
+    expect(completedResponse.body.reviewEvent.event.version).toBe(
+      saveResponse.body.version,
+    );
   });
 
   it("fails voice transcription loudly when no local command is configured", async () => {

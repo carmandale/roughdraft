@@ -174,7 +174,9 @@ export class ReviewLoopProofHelper {
       errorClass: options.errorClass,
     });
     run.updatedAt = isoTime(at);
+    if (name === "save_started") this.attachRunToOpenRound(run, at);
     if (name === "discarded") run.status = "discarded";
+    if (name === "discarded") this.removeRunFromRound(run);
     if (name === "failed") run.status = "failed";
     return structuredClone(run);
   }
@@ -189,15 +191,11 @@ export class ReviewLoopProofHelper {
     }
     const run = this.requireRun(runId);
     const now = options.at ?? this.now();
-    const round = this.openOrCreateRound(run, now);
-    run.roundId = round.roundId;
+    const round = this.attachRunToOpenRound(run, now);
     run.savedVersion = savedVersion;
     run.status = "saved";
     run.updatedAt = isoTime(now);
     run.pruneAt = isoTime(now + this.ttlMs);
-    if (!round.runIds.includes(run.runId)) {
-      round.runIds.push(run.runId);
-    }
     round.savedVersion = savedVersion;
     round.updatedAt = isoTime(now);
     this.recordMilestone(runId, "saved", { at: now });
@@ -207,18 +205,31 @@ export class ReviewLoopProofHelper {
     };
   }
 
-  completeRound(documentPath: string): ReviewHandoffProof {
+  completeRound(
+    documentPath: string,
+    roundId: string,
+    options: { currentVersion?: string } = {},
+  ): ReviewHandoffProof {
     this.pruneExpired();
+    if (roundId.trim().length === 0) {
+      throw new Error("roundId is required");
+    }
     const normalizedPath = normalizeDocumentPath(documentPath);
     const round = this.openRoundByDocument.get(normalizedPath);
     if (!round) {
       throw new Error("no open review round");
+    }
+    if (round.roundId !== roundId) {
+      throw new Error("review round mismatch");
     }
 
     const runs = round.runIds.map((runId) => this.requireRun(runId));
     const unsaved = runs.filter((run) => run.status !== "saved");
     if (unsaved.length > 0 || !round.savedVersion) {
       throw new Error("review round has unsaved runs");
+    }
+    if (options.currentVersion && round.savedVersion !== options.currentVersion) {
+      throw new Error("saved version no longer matches current file version");
     }
 
     const now = this.now();
@@ -248,13 +259,12 @@ export class ReviewLoopProofHelper {
       (run) => run.documentPath === normalizedPath,
     );
     const newestRun = runs.at(-1);
+    const openRound = this.openRoundByDocument.get(normalizedPath) ?? null;
     return {
       documentPath: normalizedPath,
-      projectPath: newestRun?.projectPath ?? null,
-      relativePath: newestRun?.relativePath ?? null,
-      openRound: structuredClone(
-        this.openRoundByDocument.get(normalizedPath) ?? null,
-      ),
+      projectPath: newestRun?.projectPath ?? openRound?.projectPath ?? null,
+      relativePath: newestRun?.relativePath ?? openRound?.relativePath ?? null,
+      openRound: structuredClone(openRound),
       activeRuns: structuredClone(runs),
       recentHandoffs: structuredClone(
         [...this.recentHandoffById.values()].filter(
@@ -262,6 +272,35 @@ export class ReviewLoopProofHelper {
         ),
       ),
     };
+  }
+
+  runForId(runId: string): ReviewRunProof {
+    return structuredClone(this.requireRun(runId));
+  }
+
+  private attachRunToOpenRound(
+    run: ReviewRunProof,
+    now: number,
+  ): ReviewRoundProof {
+    const round = this.openOrCreateRound(run, now);
+    run.roundId = round.roundId;
+    if (!round.runIds.includes(run.runId)) {
+      round.runIds.push(run.runId);
+    }
+    round.updatedAt = isoTime(now);
+    return round;
+  }
+
+  private removeRunFromRound(run: ReviewRunProof): void {
+    if (!run.roundId) return;
+    const round = this.openRoundByDocument.get(run.documentPath);
+    if (!round || round.roundId !== run.roundId) return;
+    round.runIds = round.runIds.filter((runId) => runId !== run.runId);
+    round.updatedAt = isoTime(this.now());
+    run.roundId = null;
+    if (round.runIds.length === 0) {
+      this.openRoundByDocument.delete(run.documentPath);
+    }
   }
 
   private openOrCreateRound(
@@ -298,6 +337,7 @@ export class ReviewLoopProofHelper {
     const now = this.now();
     for (const [runId, run] of this.activeRunsById) {
       if (Date.parse(run.pruneAt) <= now) {
+        this.removeRunFromRound(run);
         this.activeRunsById.delete(runId);
       }
     }

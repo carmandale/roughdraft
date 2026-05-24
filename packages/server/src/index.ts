@@ -1212,6 +1212,9 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
   });
 
   app.post("/api/review-loop/runs/:runId/saved-version", (req, res) => {
+    const target = markdownPathFromRequest(req, res);
+    if (!target) return;
+
     const savedVersion =
       typeof req.body?.savedVersion === "string"
         ? req.body.savedVersion.trim()
@@ -1222,6 +1225,21 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
     }
 
     try {
+      const run = reviewLoop.runForId(req.params.runId);
+      if (run.documentPath !== target.absolutePath) {
+        res.status(409).json({ error: "review run document mismatch" });
+        return;
+      }
+
+      const currentVersion = fileVersionFromFile(target.absolutePath);
+      if (savedVersion !== currentVersion) {
+        res.status(409).json({
+          error: "savedVersion does not match current file version",
+          currentVersion,
+        });
+        return;
+      }
+
       res.json(reviewLoop.markSavedVersion(req.params.runId, savedVersion));
     } catch (error) {
       res.status(404).json({
@@ -1240,8 +1258,17 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
     const target = markdownPathFromRequest(req, res);
     if (!target) return;
 
+    const roundId =
+      typeof req.body?.roundId === "string" ? req.body.roundId.trim() : "";
+    if (!roundId) {
+      res.status(400).json({ error: "roundId is required" });
+      return;
+    }
+
     try {
-      const handoff = reviewLoop.completeRound(target.absolutePath);
+      const handoff = reviewLoop.completeRound(target.absolutePath, roundId, {
+        currentVersion: fileVersionFromFile(target.absolutePath),
+      });
       const markdown = fs.readFileSync(target.absolutePath, "utf-8");
       const index = extractRoughdraftReviewIndex(markdown);
       const result = reviewEvents.emit({
