@@ -29,11 +29,16 @@ export interface StoredAsset {
 
 export interface CompleteReviewResult {
   delivered: boolean;
+  event?: ReviewCompletedEvent;
+  handoff?: ReviewHandoffProof;
+  delivery?: ReviewEventDelivery;
+  reason?: "missing_review_round" | "save_blocked" | "not_supported";
 }
 
 export interface ReviewWatchStatus {
   watching: boolean;
   watcherCount: number;
+  watchers: ReviewWatcherSession[];
 }
 
 export interface VoiceSelectionSnapshot {
@@ -54,6 +59,108 @@ export interface VoiceActionResult {
   replacementText?: string;
   confidence: number;
   uncertain?: boolean;
+}
+
+export type ReviewLoopMilestone =
+  | "recording_started"
+  | "stopping"
+  | "transcribing"
+  | "transcript_received"
+  | "classification_requested"
+  | "classification_completed"
+  | "edit_applied"
+  | "save_started"
+  | "saved"
+  | "discarded"
+  | "failed";
+
+export interface ReviewLoopMilestoneRecord {
+  name: ReviewLoopMilestone;
+  at: string;
+  durationMs?: number;
+  errorClass?: string;
+}
+
+export interface ReviewRunProof {
+  runId: string;
+  roundId: string | null;
+  documentPath: string;
+  projectPath: string;
+  relativePath: string;
+  selectionHash: string;
+  selectionLength: number;
+  selectionRange: {
+    from?: number;
+    to?: number;
+  };
+  preActionVersion: string;
+  savedVersion: string | null;
+  status: "active" | "saved" | "discarded" | "failed";
+  createdAt: string;
+  updatedAt: string;
+  milestones: ReviewLoopMilestoneRecord[];
+  pruneAt: string;
+}
+
+export interface ReviewRoundProof {
+  roundId: string;
+  documentPath: string;
+  projectPath: string;
+  relativePath: string;
+  runIds: string[];
+  savedVersion: string | null;
+  status: "open" | "completed";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewHandoffProof {
+  handoffId: string;
+  roundId: string;
+  documentPath: string;
+  projectPath: string;
+  relativePath: string;
+  runIds: string[];
+  savedVersion: string;
+  handoffAt: string;
+}
+
+export interface ReviewLoopStatus {
+  documentPath: string;
+  projectPath: string | null;
+  relativePath: string | null;
+  openRound: ReviewRoundProof | null;
+  activeRuns: ReviewRunProof[];
+  recentHandoffs: ReviewHandoffProof[];
+}
+
+export interface ReviewWatcherSession {
+  sessionId: string;
+  source: string;
+  documentPath: string | null;
+  startedAt: string;
+  lastDeliveredAt: string | null;
+  state: "waiting" | "delivered" | "stopped";
+}
+
+export interface ReviewEventDelivery {
+  state: "delivered" | "no_watcher";
+  watchers: ReviewWatcherSession[];
+}
+
+export interface ReviewCompletedEvent {
+  type: "review.completed";
+  sequence: number;
+  createdAt: string;
+  documentPath: string;
+  projectPath: string;
+  relativePath: string;
+  version: string;
+  handoffId?: string;
+  roundId?: string;
+  runIds?: string[];
+  savedVersion?: string;
+  handoffAt?: string;
 }
 
 export interface BackendInfo {
@@ -78,7 +185,25 @@ export interface StorageBackend {
     relativePath: string,
     onChange: (event: MarkdownFileChangeEvent) => void,
   ): () => void;
-  completeReview?(relativePath: string): Promise<CompleteReviewResult>;
+  createReviewRun?(
+    relativePath: string,
+    selection: VoiceSelectionSnapshot,
+  ): Promise<ReviewRunProof>;
+  recordReviewRunMilestone?(
+    runId: string,
+    milestone: ReviewLoopMilestone,
+    options?: { durationMs?: number; errorClass?: string },
+  ): Promise<ReviewRunProof>;
+  markReviewRunSavedVersion?(
+    runId: string,
+    relativePath: string,
+    savedVersion: string,
+  ): Promise<{ run: ReviewRunProof; round: ReviewRoundProof }>;
+  getReviewLoopStatus?(relativePath: string): Promise<ReviewLoopStatus>;
+  completeReview?(
+    relativePath: string,
+    options?: { roundId?: string },
+  ): Promise<CompleteReviewResult>;
   getReviewWatchStatus?(relativePath: string): Promise<ReviewWatchStatus>;
   processVoiceUtterance?(
     relativePath: string,

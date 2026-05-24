@@ -4,6 +4,10 @@ import {
   type CompleteReviewResult,
   type MarkdownFileChangeEvent,
   type Page,
+  type ReviewLoopMilestone,
+  type ReviewLoopStatus,
+  type ReviewRoundProof,
+  type ReviewRunProof,
   type ReviewWatchStatus,
   type StorageBackend,
   type StoredAsset,
@@ -112,15 +116,109 @@ export class ApiBackend implements StorageBackend {
     };
   }
 
-  async completeReview(relativePath: string): Promise<CompleteReviewResult> {
+  async createReviewRun(
+    relativePath: string,
+    selection: VoiceSelectionSnapshot,
+  ): Promise<ReviewRunProof> {
     const res = await fetch(
-      this.buildUrl("/api/review-events", { path: relativePath }),
+      this.buildUrl("/api/review-loop/runs", { path: relativePath }),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectPath: this.info.projectPath,
           path: relativePath,
+          selection,
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      throw new Error(
+        `Failed to create review run ${relativePath}: ${res.status}`,
+      );
+    }
+
+    return res.json();
+  }
+
+  async recordReviewRunMilestone(
+    runId: string,
+    milestone: ReviewLoopMilestone,
+    options: { durationMs?: number; errorClass?: string } = {},
+  ): Promise<ReviewRunProof> {
+    const res = await fetch(`/api/review-loop/runs/${runId}/milestones`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        milestone,
+        durationMs: options.durationMs,
+        errorClass: options.errorClass,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to record review milestone ${runId}: ${res.status}`);
+    }
+
+    return res.json();
+  }
+
+  async markReviewRunSavedVersion(
+    runId: string,
+    relativePath: string,
+    savedVersion: string,
+  ): Promise<{ run: ReviewRunProof; round: ReviewRoundProof }> {
+    const res = await fetch(`/api/review-loop/runs/${runId}/saved-version`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectPath: this.info.projectPath,
+        path: relativePath,
+        savedVersion,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `Failed to bind saved review version ${runId}: ${res.status}`,
+      );
+    }
+
+    return res.json();
+  }
+
+  async getReviewLoopStatus(relativePath: string): Promise<ReviewLoopStatus> {
+    const res = await fetch(
+      this.buildUrl("/api/review-loop/status", { path: relativePath }),
+    );
+
+    if (!res.ok) {
+      throw new Error(
+        `Failed to get review loop status ${relativePath}: ${res.status}`,
+      );
+    }
+
+    return res.json();
+  }
+
+  async completeReview(
+    relativePath: string,
+    options: { roundId?: string } = {},
+  ): Promise<CompleteReviewResult> {
+    if (!options.roundId) {
+      return { delivered: false, reason: "missing_review_round" };
+    }
+
+    const res = await fetch(
+      this.buildUrl("/api/review-loop/complete", { path: relativePath }),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectPath: this.info.projectPath,
+          path: relativePath,
+          roundId: options.roundId,
         }),
       },
     );
@@ -131,8 +229,14 @@ export class ApiBackend implements StorageBackend {
       );
     }
 
-    const payload = (await res.json()) as { delivered?: unknown };
-    return { delivered: payload.delivered === true };
+    const payload = (await res.json()) as CompleteReviewResult & {
+      reviewEvent?: CompleteReviewResult;
+    };
+    return {
+      ...payload.reviewEvent,
+      handoff: payload.handoff,
+      delivered: payload.reviewEvent?.delivered === true,
+    };
   }
 
   async getReviewWatchStatus(relativePath: string): Promise<ReviewWatchStatus> {
@@ -149,11 +253,15 @@ export class ApiBackend implements StorageBackend {
     const payload = (await res.json()) as {
       watching?: unknown;
       watcherCount?: unknown;
+      watchers?: unknown;
     };
     return {
       watching: payload.watching === true,
       watcherCount:
         typeof payload.watcherCount === "number" ? payload.watcherCount : 0,
+      watchers: Array.isArray(payload.watchers)
+        ? (payload.watchers as ReviewWatchStatus["watchers"])
+        : [],
     };
   }
 

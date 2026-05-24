@@ -33,6 +33,7 @@ import { MarkdownCodeEditor } from "./MarkdownCodeEditor";
 import { toHtml } from "./markdown";
 import type {
   Page,
+  ReviewLoopMilestone,
   StorageBackend,
   VoiceActionResult,
   VoiceSelectionSnapshot,
@@ -42,7 +43,7 @@ import { useCommentAnchorLayout } from "./useCommentAnchorLayout";
 export type DocumentSaveState = "saved" | "unsaved" | "saving" | "error";
 
 export type ManualSaveResult =
-  | { status: "saved" }
+  | { status: "saved"; savedVersion?: string }
   | { status: "blocked" }
   | { status: "error"; error: unknown };
 
@@ -52,12 +53,20 @@ export interface DocumentSaveController {
 
 type EditorViewMode = "rich-text" | "code";
 export type DocumentInteractionMode = "viewing" | "suggesting" | "editing";
-type VoiceProgressStage =
-  | "transcribing"
-  | "processing"
-  | "editing"
-  | "done"
-  | "error";
+export const VOICE_REVIEW_TIMELINE_STAGES = [
+  "listening",
+  "stopping",
+  "transcribing",
+  "transcript_received",
+  "classifying",
+  "applying",
+  "saving",
+  "saved",
+  "failed",
+  "stale",
+  "discarded",
+] as const;
+type VoiceProgressStage = (typeof VOICE_REVIEW_TIMELINE_STAGES)[number];
 
 interface PageCardProps {
   page: Page;
@@ -65,7 +74,7 @@ interface PageCardProps {
   selected?: boolean;
   layout?: "default" | "embedded-demo";
   focusRequestKey?: string | null;
-  onSave: (id: string, content: string) => Promise<void>;
+  onSave: (id: string, content: string) => Promise<Page | void>;
   onSaveStateChange?: (state: DocumentSaveState) => void;
   editorViewMode?: EditorViewMode;
   interactionMode?: DocumentInteractionMode;
@@ -85,7 +94,7 @@ interface PageCardEditorSurfaceProps {
   selected: boolean;
   layout: "default" | "embedded-demo";
   focusRequestKey: string | null;
-  onSave: (id: string, content: string) => Promise<void>;
+  onSave: (id: string, content: string) => Promise<Page | void>;
   onSaveStateChange: (state: DocumentSaveState) => void;
   editorViewMode: EditorViewMode;
   interactionMode: DocumentInteractionMode;
@@ -111,6 +120,9 @@ interface RichTextEditorSurfaceProps {
   backend: StorageBackend;
   onEditorReady?: (editor: Editor | null) => void;
   onCommentRailPresenceChange?: (hasCommentRailSpace: boolean) => void;
+  onVoiceActionApplied?: (
+    reviewRunId: string,
+  ) => Promise<ManualSaveResult>;
 }
 
 interface VoiceCaptureContext {
@@ -119,6 +131,8 @@ interface VoiceCaptureContext {
   chunks: Blob[];
   startedAtMs: number;
   shouldTranscribe: boolean;
+  reviewRunId: string | null;
+  reviewRunPromise?: Promise<string | null>;
 }
 
 interface CodeEditorSurfaceProps {
@@ -127,6 +141,11 @@ interface CodeEditorSurfaceProps {
   interactionMode: DocumentInteractionMode;
   layout: "default" | "embedded-demo";
   onMarkdownChange: (markdown: string) => void;
+}
+
+function formatVoiceElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function audioBufferToWavBlob(audioBuffer: AudioBuffer): Blob {
@@ -752,6 +771,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
   backend,
   onEditorReady,
   onCommentRailPresenceChange,
+  onVoiceActionApplied,
 }: RichTextEditorSurfaceProps) {
   const editorRef = useRef<Editor | null>(null);
   const criticChangeFrameRef = useRef<number | null>(null);
@@ -783,6 +803,9 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     runId: number;
     stage: VoiceProgressStage;
     message: string;
+    startedAtMs?: number;
+    updatedAtMs?: number;
+    elapsedMs?: number;
   } | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -797,6 +820,40 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
   const applyVoiceActionRef = useRef<
     (selection: VoiceSelectionSnapshot, action: VoiceActionResult) => void
   >(() => {});
+
+  const setVoiceProgressStage = useCallback(
+    (
+      runId: number,
+      stage: VoiceProgressStage,
+      message: string,
+      startedAtMs?: number,
+    ) => {
+      const now = Date.now();
+      setVoiceProgress({
+        runId,
+        stage,
+        message,
+        startedAtMs,
+        updatedAtMs: now,
+        elapsedMs: startedAtMs ? now - startedAtMs : undefined,
+      });
+    },
+    [],
+  );
+
+  const recordReviewMilestone = useCallback(
+    async (
+      reviewRunId: string | null | undefined,
+      milestone: ReviewLoopMilestone,
+      options?: { durationMs?: number; errorClass?: string },
+    ) => {
+      if (!reviewRunId || !backend.recordReviewRunMilestone) return;
+      await backend
+        .recordReviewRunMilestone(reviewRunId, milestone, options)
+        .catch(() => {});
+    },
+    [backend],
+  );
 
   const resolveFileUrl = useCallback(
     (path: string) => backend.resolveFileUrl(path),
@@ -1424,14 +1481,18 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       utterance: string,
       runId: number,
       targetSelection: VoiceSelectionSnapshot | null,
+      reviewRunId: string | null,
+      startedAtMs?: number,
     ) => {
       const normalizedUtterance = utterance.trim();
       if (shouldIgnoreUtterance(normalizedUtterance)) {
-        setVoiceProgress({
+        await recordReviewMilestone(reviewRunId, "discarded");
+        setVoiceProgressStage(
           runId,
-          stage: "done",
-          message: "No actionable feedback detected.",
-        });
+          "discarded",
+          "No actionable feedback detected.",
+          startedAtMs,
+        );
         window.setTimeout(() => {
           setVoiceProgress((current) =>
             current?.runId === runId ? null : current,
@@ -1449,29 +1510,69 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       }
 
       setVoiceStatus("processing");
-      setVoiceProgress({
+      await recordReviewMilestone(reviewRunId, "classification_requested");
+      setVoiceProgressStage(
         runId,
-        stage: "processing",
-        message: "Processing feedback...",
-      });
+        "classifying",
+        "Classifying feedback...",
+        startedAtMs,
+      );
       try {
         const action = await backend.processVoiceUtterance(
           activeDocumentPath,
           normalizedUtterance,
           targetSelection,
         );
-        setVoiceProgress({
+        await recordReviewMilestone(reviewRunId, "classification_completed");
+        setVoiceProgressStage(
           runId,
-          stage: "editing",
-          message: "Applying comment or suggestion...",
-        });
+          "applying",
+          "Applying comment or suggestion...",
+          startedAtMs,
+        );
         applyVoiceActionRef.current(targetSelection, action);
+        await recordReviewMilestone(reviewRunId, "edit_applied");
+        if (backend.info.kind === "local-files" && backend.createReviewRun) {
+          if (!reviewRunId || !onVoiceActionApplied) {
+            setVoiceStatus("error");
+            setVoiceStatusMessage("Voice feedback was not saved.");
+            setVoiceProgressStage(
+              runId,
+              "failed",
+              "Voice feedback failed: review proof was not created.",
+              startedAtMs,
+            );
+            return;
+          }
+          setVoiceProgressStage(
+            runId,
+            "saving",
+            "Saving feedback to the Markdown file...",
+            startedAtMs,
+          );
+          const saveResult = await onVoiceActionApplied(reviewRunId);
+          if (saveResult.status !== "saved") {
+            await recordReviewMilestone(reviewRunId, "failed", {
+              errorClass: saveResult.status,
+            });
+            setVoiceStatus("error");
+            setVoiceStatusMessage("Voice feedback was not saved.");
+            setVoiceProgressStage(
+              runId,
+              "failed",
+              "Voice feedback failed: save proof is missing.",
+              startedAtMs,
+            );
+            return;
+          }
+        }
         setVoiceStatus(shouldRecordVoiceRef.current ? "recording" : "paused");
-        setVoiceProgress({
+        setVoiceProgressStage(
           runId,
-          stage: "done",
-          message: "Feedback added.",
-        });
+          "saved",
+          "Feedback saved.",
+          startedAtMs,
+        );
         window.setTimeout(() => {
           setVoiceProgress((current) =>
             current?.runId === runId ? null : current,
@@ -1481,15 +1582,25 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
         setVoiceStatus("error");
         const message =
           error instanceof Error ? error.message : "Voice processing failed";
-        setVoiceStatusMessage(message);
-        setVoiceProgress({
-          runId,
-          stage: "error",
-          message: `Voice feedback failed: ${message}`,
+        await recordReviewMilestone(reviewRunId, "failed", {
+          errorClass: error instanceof Error ? error.name : "Error",
         });
+        setVoiceStatusMessage(message);
+        setVoiceProgressStage(
+          runId,
+          "failed",
+          `Voice feedback failed: ${message}`,
+          startedAtMs,
+        );
       }
     },
-    [activeDocumentPath, backend],
+    [
+      activeDocumentPath,
+      backend,
+      onVoiceActionApplied,
+      recordReviewMilestone,
+      setVoiceProgressStage,
+    ],
   );
 
   const flushRecordedAudio = useCallback(
@@ -1497,13 +1608,19 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       chunks: Blob[],
       runId: number,
       targetSelection: VoiceSelectionSnapshot | null,
+      reviewRunId: string | null,
+      reviewRunPromise?: Promise<string | null>,
+      startedAtMs?: number,
     ) => {
       if (chunks.length === 0) return;
-      setVoiceProgress({
+      const proofRunId = reviewRunId ?? (await reviewRunPromise) ?? null;
+      await recordReviewMilestone(proofRunId, "transcribing");
+      setVoiceProgressStage(
         runId,
-        stage: "transcribing",
-        message: "Transcribing audio...",
-      });
+        "transcribing",
+        "Transcribing audio...",
+        startedAtMs,
+      );
 
       try {
         const originalBlob = new Blob(chunks, {
@@ -1520,11 +1637,13 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           );
           const rms = audioBufferRms(decoded);
           if (rms < 0.0035) {
-            setVoiceProgress({
+            await recordReviewMilestone(proofRunId, "discarded");
+            setVoiceProgressStage(
               runId,
-              stage: "done",
-              message: "No speech detected.",
-            });
+              "discarded",
+              "No speech detected.",
+              startedAtMs,
+            );
             window.setTimeout(() => {
               setVoiceProgress((current) =>
                 current?.runId === runId ? null : current,
@@ -1560,11 +1679,15 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           "Timed out starting voice transcription.",
         );
         if (!startResponse.ok) {
-          setVoiceProgress({
-            runId,
-            stage: "error",
-            message: "Voice feedback failed: unable to start transcription.",
+          await recordReviewMilestone(proofRunId, "failed", {
+            errorClass: "TranscriptionStartError",
           });
+          setVoiceProgressStage(
+            runId,
+            "failed",
+            "Voice feedback failed: unable to start transcription.",
+            startedAtMs,
+          );
           return;
         }
         const startPayload = (await startResponse.json()) as {
@@ -1572,11 +1695,15 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
         };
         const sessionId = startPayload.sessionId;
         if (!sessionId) {
-          setVoiceProgress({
-            runId,
-            stage: "error",
-            message: "Voice feedback failed: missing transcription session.",
+          await recordReviewMilestone(proofRunId, "failed", {
+            errorClass: "MissingTranscriptionSession",
           });
+          setVoiceProgressStage(
+            runId,
+            "failed",
+            "Voice feedback failed: missing transcription session.",
+            startedAtMs,
+          );
           return;
         }
 
@@ -1595,11 +1722,15 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           "Timed out uploading voice audio.",
         );
         if (!chunkResponse.ok) {
-          setVoiceProgress({
-            runId,
-            stage: "error",
-            message: "Voice feedback failed: upload error.",
+          await recordReviewMilestone(proofRunId, "failed", {
+            errorClass: "AudioUploadError",
           });
+          setVoiceProgressStage(
+            runId,
+            "failed",
+            "Voice feedback failed: upload error.",
+            startedAtMs,
+          );
           return;
         }
 
@@ -1620,11 +1751,15 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           setVoiceStatus("error");
           const message = payload.error ?? "transcription stop error";
           setVoiceStatusMessage(message);
-          setVoiceProgress({
-            runId,
-            stage: "error",
-            message: `Voice feedback failed: ${message}`,
+          await recordReviewMilestone(proofRunId, "failed", {
+            errorClass: "TranscriptionStopError",
           });
+          setVoiceProgressStage(
+            runId,
+            "failed",
+            `Voice feedback failed: ${message}`,
+            startedAtMs,
+          );
           return;
         }
         const stopPayload = (await stopResponse.json()) as {
@@ -1632,13 +1767,28 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
         };
         const transcript = stopPayload.transcript?.trim() ?? "";
         if (transcript.length > 0) {
-          await processVoiceUtterance(transcript, runId, targetSelection);
-        } else {
-          setVoiceProgress({
+          await recordReviewMilestone(proofRunId, "transcript_received");
+          setVoiceProgressStage(
             runId,
-            stage: "done",
-            message: "No speech detected.",
-          });
+            "transcript_received",
+            "Transcript received.",
+            startedAtMs,
+          );
+          await processVoiceUtterance(
+            transcript,
+            runId,
+            targetSelection,
+            proofRunId,
+            startedAtMs,
+          );
+        } else {
+          await recordReviewMilestone(proofRunId, "discarded");
+          setVoiceProgressStage(
+            runId,
+            "discarded",
+            "No speech detected.",
+            startedAtMs,
+          );
           window.setTimeout(() => {
             setVoiceProgress((current) =>
               current?.runId === runId ? null : current,
@@ -1650,14 +1800,18 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
         const message =
           error instanceof Error ? error.message : "Voice transcription failed";
         setVoiceStatusMessage(message);
-        setVoiceProgress({
-          runId,
-          stage: "error",
-          message: `Voice feedback failed: ${message}`,
+        await recordReviewMilestone(proofRunId, "failed", {
+          errorClass: error instanceof Error ? error.name : "Error",
         });
+        setVoiceProgressStage(
+          runId,
+          "failed",
+          `Voice feedback failed: ${message}`,
+          startedAtMs,
+        );
       }
     },
-    [processVoiceUtterance],
+    [processVoiceUtterance, recordReviewMilestone, setVoiceProgressStage],
   );
 
   const stopVoiceCapture = useCallback((cancel = false) => {
@@ -1670,27 +1824,33 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       }
       const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
       if (captureContext && !cancel) {
-        const elapsedMs = Date.now() - captureContext.startedAtMs;
-        if (elapsedMs < 450) {
-          captureContext.shouldTranscribe = false;
-          setVoiceProgress({
-            runId,
-            stage: "done",
-            message: "No speech detected.",
-          });
-          window.setTimeout(() => {
-            setVoiceProgress((current) =>
-              current?.runId === runId ? null : current,
+          const elapsedMs = Date.now() - captureContext.startedAtMs;
+          if (elapsedMs < 450) {
+            captureContext.shouldTranscribe = false;
+            void recordReviewMilestone(captureContext.reviewRunId, "discarded");
+            setVoiceProgressStage(
+              runId,
+              "discarded",
+              "No speech detected.",
+              captureContext.startedAtMs,
             );
-          }, 900);
-        } else {
-          setVoiceProgress({
-            runId,
-            stage: "transcribing",
-            message: "Transcribing audio...",
-          });
+            window.setTimeout(() => {
+              setVoiceProgress((current) =>
+                current?.runId === runId ? null : current,
+            );
+            }, 900);
+          } else {
+            void recordReviewMilestone(captureContext.reviewRunId, "stopping", {
+              durationMs: elapsedMs,
+            });
+            setVoiceProgressStage(
+              runId,
+              "stopping",
+              "Stopping recording...",
+              captureContext.startedAtMs,
+            );
+          }
         }
-      }
       if (cancel) {
         setVoiceProgress(null);
       }
@@ -1707,7 +1867,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     }
     voicePinnedSelectionRef.current = null;
     setVoiceStatus("idle");
-  }, []);
+  }, [recordReviewMilestone, setVoiceProgressStage]);
 
   const ensureVoiceCapture = useCallback(() => {
     if (mediaRecorderRef.current || !shouldRecordVoiceRef.current) return;
@@ -1742,6 +1902,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           chunks: recorderChunks,
           startedAtMs: Date.now(),
           shouldTranscribe: true,
+          reviewRunId: null,
         };
         voiceCaptureContextRef.current = captureContext;
         recorder.ondataavailable = (event) => {
@@ -1759,11 +1920,42 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             captureContext.chunks,
             captureContext.runId,
             captureContext.selection,
+            captureContext.reviewRunId,
+            captureContext.reviewRunPromise,
+            captureContext.startedAtMs,
           );
         };
         mediaRecorderRef.current = recorder;
         recorder.start();
         setVoiceStatus("recording");
+        setVoiceProgressStage(
+          runId,
+          "listening",
+          "Listening...",
+          captureContext.startedAtMs,
+        );
+        if (
+          activeDocumentPath &&
+          recordingSelection &&
+          backend.createReviewRun
+        ) {
+          const reviewRunPromise = backend
+            .createReviewRun(activeDocumentPath, recordingSelection)
+            .then(async (run) => {
+              if (voiceCaptureContextRef.current?.runId === runId) {
+                voiceCaptureContextRef.current.reviewRunId = run.runId;
+              }
+              captureContext.reviewRunId = run.runId;
+              await recordReviewMilestone(run.runId, "recording_started");
+              return run.runId;
+            })
+            .catch(() => {
+              captureContext.reviewRunId = null;
+              return null;
+            });
+          captureContext.reviewRunPromise = reviewRunPromise;
+          void reviewRunPromise;
+        }
       })
       .catch((error: unknown) => {
         setVoiceStatus("error");
@@ -1773,7 +1965,13 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             : "Microphone permission denied.";
         setVoiceStatusMessage(message);
       });
-  }, [flushRecordedAudio]);
+  }, [
+    activeDocumentPath,
+    backend,
+    flushRecordedAudio,
+    recordReviewMilestone,
+    setVoiceProgressStage,
+  ]);
 
   useEffect(() => {
     editor?.setEditable(interactionMode !== "viewing", false);
@@ -1799,22 +1997,28 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           const elapsedMs = Date.now() - captureContext.startedAtMs;
           if (elapsedMs < 450) {
             captureContext.shouldTranscribe = false;
-            setVoiceProgress({
-              runId: captureContext.runId,
-              stage: "done",
-              message: "No speech detected.",
-            });
+            void recordReviewMilestone(captureContext.reviewRunId, "discarded");
+            setVoiceProgressStage(
+              captureContext.runId,
+              "discarded",
+              "No speech detected.",
+              captureContext.startedAtMs,
+            );
             window.setTimeout(() => {
               setVoiceProgress((current) =>
                 current?.runId === captureContext.runId ? null : current,
               );
             }, 900);
           } else {
-            setVoiceProgress({
-              runId: captureContext.runId,
-              stage: "transcribing",
-              message: "Transcribing audio...",
+            void recordReviewMilestone(captureContext.reviewRunId, "stopping", {
+              durationMs: elapsedMs,
             });
+            setVoiceProgressStage(
+              captureContext.runId,
+              "stopping",
+              "Stopping recording...",
+              captureContext.startedAtMs,
+            );
           }
         }
         const recorder = mediaRecorderRef.current;
@@ -1854,6 +2058,8 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     ensureVoiceCapture,
     getSelectionSnapshot,
     interactionMode,
+    recordReviewMilestone,
+    setVoiceProgressStage,
     stopVoiceCapture,
   ]);
 
@@ -2743,6 +2949,9 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
                   <div className="font-medium">{voiceProgress.message}</div>
                   <div className="mt-1 text-xs uppercase tracking-wide text-stone-500 dark:text-slate-400">
                     {voiceProgress.stage}
+                    {typeof voiceProgress.elapsedMs === "number"
+                      ? ` · ${formatVoiceElapsed(voiceProgress.elapsedMs)}`
+                      : ""}
                   </div>
                 </div>
               ) : null}
@@ -2965,13 +3174,13 @@ const PageCardEditorSurface = memo(function PageCardEditorSurface({
       onSaveStateChange("saving");
 
       try {
-        await onSave(page.id, nextMarkdown);
+        const savedPage = await onSave(page.id, nextMarkdown);
         lastAcceptedMarkdownRef.current = nextMarkdown;
         reportDirtyState(pendingMarkdownRef.current !== nextMarkdown);
         onSaveStateChange(
           pendingMarkdownRef.current === nextMarkdown ? "saved" : "saving",
         );
-        return { status: "saved" };
+        return { status: "saved", savedVersion: savedPage?.version };
       } catch (error) {
         console.error("Failed to save page:", error);
         onSaveStateChange("error");
@@ -3029,19 +3238,43 @@ const PageCardEditorSurface = memo(function PageCardEditorSurface({
       !inFlightSaveRef.current
     ) {
       onSaveStateChange("saved");
-      return { status: "saved" };
+      return { status: "saved", savedVersion: page.version };
     }
 
     if (inFlightSaveRef.current) {
       await inFlightSaveRef.current;
       if (pendingMarkdownRef.current === lastAcceptedMarkdownRef.current) {
         onSaveStateChange("saved");
-        return { status: "saved" };
+        return { status: "saved", savedVersion: page.version };
       }
     }
 
     return await performSave(pendingMarkdownRef.current);
-  }, [onSaveStateChange, performSave]);
+  }, [onSaveStateChange, page.version, performSave]);
+
+  const handleVoiceActionApplied = useCallback(
+    async (reviewRunId: string): Promise<ManualSaveResult> => {
+      if (
+        !activeDocumentPath ||
+        !backend.recordReviewRunMilestone ||
+        !backend.markReviewRunSavedVersion
+      ) {
+        return { status: "blocked" };
+      }
+
+      await backend.recordReviewRunMilestone(reviewRunId, "save_started");
+      const result = await flushSave();
+      if (result.status !== "saved" || !result.savedVersion) return result;
+
+      await backend.markReviewRunSavedVersion(
+        reviewRunId,
+        activeDocumentPath,
+        result.savedVersion,
+      );
+      return result;
+    },
+    [activeDocumentPath, backend, flushSave],
+  );
 
   useEffect(() => {
     onSaveControllerChange?.({ flushSave });
@@ -3165,6 +3398,7 @@ const PageCardEditorSurface = memo(function PageCardEditorSurface({
       onCommentRailPresenceChange={onCommentRailPresenceChange}
       backend={backend}
       onEditorReady={onEditorReady}
+      onVoiceActionApplied={handleVoiceActionApplied}
     />
   );
 });

@@ -40,11 +40,12 @@ import {
   type DocumentSaveState,
   PageCard,
 } from "./PageCard";
-import type { Page, StorageBackend } from "./storage";
+import type { CompleteReviewResult, Page, StorageBackend } from "./storage";
 
 type DiskChangeState = "clean" | "changed" | "conflict" | "paused";
 type ReviewHandoffState =
   | "idle"
+  | "save_blocked"
   | "notifying"
   | "notified"
   | "undelivered"
@@ -189,11 +190,79 @@ export function isReviewHandoffDisabled({
 }) {
   return (
     saveState === "saving" ||
-    saveState === "unsaved" ||
     saveState === "error" ||
     reviewHandoffState !== "idle" ||
     documentDiskChangeState !== "clean"
   );
+}
+
+export function getReviewHandoffViewModel({
+  state,
+  watcherCount,
+}: {
+  state: ReviewHandoffState;
+  watcherCount: number;
+}) {
+  if (state === "notifying") {
+    return {
+      buttonLabel: "Sending",
+      inlineLabel: "Notifying",
+      title: "Sending saved review",
+      body: "Roughdraft is saving proof and delivering the handoff to the active watcher.",
+      tone: "neutral" as const,
+    };
+  }
+
+  if (state === "notified") {
+    return {
+      buttonLabel: "Sent",
+      inlineLabel: "Handoff delivered",
+      title: "Handoff delivered",
+      body: "A watcher received this saved review round. Roughdraft is waiting for a later Markdown file change before claiming anything else happened.",
+      tone: "success" as const,
+    };
+  }
+
+  if (state === "save_blocked") {
+    return {
+      buttonLabel: "Not sent",
+      inlineLabel: "Save proof missing",
+      title: "Save proof missing",
+      body: "The handoff was blocked because Roughdraft could not prove the spoken feedback was saved to this Markdown file.",
+      tone: "warning" as const,
+    };
+  }
+
+  if (state === "undelivered") {
+    return {
+      buttonLabel: "Not sent",
+      inlineLabel: "No watcher attached",
+      title: "No watcher attached",
+      body: "The review round was saved, but no watcher was connected for this document at handoff time.",
+      tone: "warning" as const,
+    };
+  }
+
+  if (state === "error") {
+    return {
+      buttonLabel: "Not sent",
+      inlineLabel: "Handoff failed",
+      title: "Handoff failed",
+      body: "Roughdraft could not complete the saved review handoff. Check that the local server is still running.",
+      tone: "danger" as const,
+    };
+  }
+
+  return {
+    buttonLabel: "I'm done",
+    inlineLabel: watcherCount > 0 ? "Watcher attached" : "No watcher attached",
+    title: watcherCount > 0 ? "Watcher attached" : "No watcher attached",
+    body:
+      watcherCount > 0
+        ? "A watcher is connected for this document. Handoff will only be marked delivered after saved review proof is sent."
+        : "No watcher is connected for this document yet.",
+    tone: "neutral" as const,
+  };
 }
 
 interface DocumentWorkspaceProps {
@@ -202,7 +271,7 @@ interface DocumentWorkspaceProps {
   documentFilenameLabel: string;
   documentEditorViewMode: DocumentEditorViewMode;
   onDocumentEditorViewModeChange: (mode: DocumentEditorViewMode) => void;
-  onSaveDocument: (id: string, content: string) => Promise<void>;
+  onSaveDocument: (id: string, content: string) => Promise<Page | void>;
   onDocumentSaveStateChange: (state: DocumentSaveState) => void;
   onDocumentDirtyStateChange: (isDirty: boolean) => void;
   onDocumentLocalContentChange: (markdown: string) => void;
@@ -211,7 +280,7 @@ interface DocumentWorkspaceProps {
   onReloadDocumentFromDisk: () => void | Promise<void>;
   onKeepEditingWithoutAutosave: () => void;
   onOverwriteDocumentOnDisk: () => void | Promise<void>;
-  onCompleteReview: () => Promise<{ delivered: boolean }>;
+  onCompleteReview: () => Promise<CompleteReviewResult>;
   backend: StorageBackend | null;
 }
 
@@ -354,10 +423,20 @@ export function DocumentWorkspace({
           detail: { path: activeDocumentPath },
         }),
       );
+      const saveResult = await saveControllerRef.current?.flushSave();
+      if (saveResult && saveResult.status !== "saved") {
+        setReviewHandoffState("save_blocked");
+        return;
+      }
       const result = await onCompleteReview();
       if (result.delivered) {
         setReviewWatcherCount(0);
         setReviewHandoffState("notified");
+      } else if (
+        result.reason === "missing_review_round" ||
+        result.reason === "save_blocked"
+      ) {
+        setReviewHandoffState("save_blocked");
       } else {
         setReviewWatcherCount(0);
         setReviewHandoffState("undelivered");
@@ -384,32 +463,19 @@ export function DocumentWorkspace({
   const showReviewHandoffButton =
     !!activeDocumentPath &&
     (reviewWatcherCount > 0 || reviewHandoffState !== "idle");
-  const reviewHandoffButtonLabel =
-    reviewHandoffState === "notifying"
-      ? "Sending"
-      : reviewHandoffState === "notified"
-        ? "Sent"
-        : reviewHandoffState === "error" || reviewHandoffState === "undelivered"
-          ? "Not sent"
-          : "I'm done";
+  const reviewHandoffView = getReviewHandoffViewModel({
+    state: reviewHandoffState,
+    watcherCount: reviewWatcherCount,
+  });
+  const reviewHandoffButtonLabel = reviewHandoffView.buttonLabel;
   const ReviewHandoffButtonIcon =
     reviewHandoffState === "notifying"
       ? Loader2
-      : reviewHandoffState === "error" || reviewHandoffState === "undelivered"
+      : reviewHandoffState === "error" ||
+          reviewHandoffState === "undelivered" ||
+          reviewHandoffState === "save_blocked"
         ? AlertTriangle
         : CheckCheck;
-  const reviewHandoffStatusTitle =
-    reviewHandoffState === "undelivered"
-      ? "No agent is watching now"
-      : reviewHandoffState === "error"
-        ? "Could not notify agent"
-        : "Your agent is now working";
-  const reviewHandoffStatusBody =
-    reviewHandoffState === "undelivered"
-      ? "The handoff was not delivered because the watcher is no longer connected."
-      : reviewHandoffState === "error"
-        ? "Roughdraft could not send the handoff. Check that the local server is still running."
-        : "It will take the appropriate next action, including replying to comments, questions, and suggestions, and/or directly editing the doc.";
 
   return (
     <div
@@ -462,7 +528,8 @@ export function DocumentWorkspace({
                   {reviewHandoffState === "notifying" ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : reviewHandoffState === "error" ||
-                    reviewHandoffState === "undelivered" ? (
+                    reviewHandoffState === "undelivered" ||
+                    reviewHandoffState === "save_blocked" ? (
                     <AlertTriangle className="size-4" />
                   ) : (
                     <CheckCheck className="size-4" />
@@ -470,10 +537,10 @@ export function DocumentWorkspace({
                 </span>
                 <div>
                   <div className="text-sm font-semibold text-stone-950 dark:text-slate-50">
-                    {reviewHandoffStatusTitle}
+                    {reviewHandoffView.title}
                   </div>
                   <p className="mt-1 text-sm leading-6 text-stone-600 dark:text-slate-300">
-                    {reviewHandoffStatusBody}
+                    {reviewHandoffView.body}
                   </p>
                 </div>
               </div>
@@ -617,19 +684,15 @@ export function DocumentWorkspace({
                         {reviewHandoffState === "notifying" ? (
                           <Loader2 className="size-[0.6rem] animate-spin" />
                         ) : reviewHandoffState === "error" ||
-                          reviewHandoffState === "undelivered" ? (
+                          reviewHandoffState === "undelivered" ||
+                          reviewHandoffState === "save_blocked" ? (
                           <AlertTriangle className="size-[0.6rem]" />
                         ) : reviewWatcherCount > 0 ? (
                           <CheckCheck className="size-[0.6rem]" />
                         ) : (
                           <CheckCheck className="size-[0.6rem]" />
                         )}
-                        {reviewHandoffState === "notifying"
-                          ? "Notifying"
-                          : reviewHandoffState === "error" ||
-                              reviewHandoffState === "undelivered"
-                            ? "Review not sent"
-                            : "Agent watching"}
+                        {reviewHandoffView.inlineLabel}
                       </span>
                     ) : null}
                   </div>

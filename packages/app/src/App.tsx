@@ -1396,6 +1396,7 @@ export function PreviewPage() {
         content,
       );
       setPreviewPage(savedPage);
+      return savedPage;
     },
     [backend],
   );
@@ -1413,7 +1414,7 @@ export function PreviewPage() {
   const handleCompletePreviewReview = useCallback(async () => {
     return backend.completeReview
       ? backend.completeReview(PREVIEW_DOCUMENT_PATH)
-      : { delivered: false };
+      : { delivered: false, reason: "not_supported" as const };
   }, [backend]);
 
   return (
@@ -1671,6 +1672,7 @@ export function App() {
       applyDocumentPage(nextDocument);
       documentDirtyRef.current = false;
       setDocumentDiskChangeState("clean");
+      return nextDocument;
     },
     [activeDocumentPath, applyDocumentPage],
   );
@@ -1788,9 +1790,20 @@ export function App() {
     documentDirtyRef.current = false;
     setDocumentDiskChangeState("clean");
 
-    return currentBackend.completeReview
-      ? currentBackend.completeReview(currentPath)
-      : { delivered: false };
+    if (!currentBackend.completeReview) {
+      return { delivered: false, reason: "not_supported" as const };
+    }
+
+    const reviewLoopStatus = await currentBackend.getReviewLoopStatus?.(
+      currentPath,
+    );
+    const roundId = reviewLoopStatus?.openRound?.roundId;
+    const savedVersion = reviewLoopStatus?.openRound?.savedVersion;
+    if (!roundId || !savedVersion) {
+      return { delivered: false, reason: "missing_review_round" as const };
+    }
+
+    return currentBackend.completeReview(currentPath, { roundId });
   }, [applyDocumentPage]);
 
   useEffect(() => {

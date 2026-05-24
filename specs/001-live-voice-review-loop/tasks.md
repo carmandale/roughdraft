@@ -28,12 +28,12 @@ bead: bd-1ny1
 
 ## Group C: App Timeline And Save-Before-Handoff
 
-- [ ] T12: Add PageCard/DocumentWorkspace component tests for selection-driven voice timeline states: listening, stopping, transcribing, transcript received, classifying, applying, saving, saved, failed-with-reason, and stale/discarded run.
-- [ ] T13: Extend storage types and `ApiBackend` for review-run creation, redacted milestone reporting, saved-version binding, review-loop status/proof, and round-aware completeReview.
-- [ ] T14: Wire PageCard voice capture/action flow to create or update a proof-bearing run while keeping transient live states responsive and client-owned.
-- [ ] T15: Bind voice-applied CriticMarkup to save proof: flush or observe the save path after action application, record the saved file version on the run/round, and visibly fail or block when save conflicts or save errors occur.
-- [ ] T16: Change Done Reviewing gating so it sends a review round only when every non-discarded run has saved-version proof; no-watcher and missing-save cases must use explicit degraded copy.
-- [ ] T17: Replace false handoff copy such as `Your agent is now working` with watcher/file-change truth in app UI and screenshot-state docs.
+- [x] T12: Add PageCard/DocumentWorkspace component tests for selection-driven voice timeline states: listening, stopping, transcribing, transcript received, classifying, applying, saving, saved, failed-with-reason, and stale/discarded run.
+- [x] T13: Extend storage types and `ApiBackend` for review-run creation, redacted milestone reporting, saved-version binding, review-loop status/proof, and round-aware completeReview.
+- [x] T14: Wire PageCard voice capture/action flow to create or update a proof-bearing run while keeping transient live states responsive and client-owned.
+- [x] T15: Bind voice-applied CriticMarkup to save proof: flush or observe the save path after action application, record the saved file version on the run/round, and visibly fail or block when save conflicts or save errors occur.
+- [x] T16: Change Done Reviewing gating so it sends a review round only when every non-discarded run has saved-version proof; no-watcher and missing-save cases must use explicit degraded copy.
+- [x] T17: Replace false handoff copy such as `Your agent is now working` with watcher/file-change truth in app UI and screenshot-state docs.
 
 ## Group D: File-Change Observation And Evidence UI
 
