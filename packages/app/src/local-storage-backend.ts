@@ -1,5 +1,6 @@
 import type {
   BackendInfo,
+  CompleteReviewResult,
   Page,
   StorageBackend,
   StoredAsset,
@@ -120,8 +121,8 @@ export class LocalStorageBackend implements StorageBackend {
     return undefined;
   }
 
-  async completeReview(_relativePath: string): Promise<{ delivered: boolean }> {
-    return { delivered: false };
+  async completeReview(_relativePath: string): Promise<CompleteReviewResult> {
+    return { delivered: false, reason: "not_supported" };
   }
 
   async processVoiceUtterance(

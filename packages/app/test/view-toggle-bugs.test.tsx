@@ -53,6 +53,7 @@ function createBackend({
     backend.getReviewWatchStatus = async () => ({
       watching: watcherCount > 0,
       watcherCount,
+      watchers: [],
     });
   }
 
@@ -419,7 +420,6 @@ describe("saving/saved status indicator (issue 2 fix)", () => {
 
   it.each([
     ["saving", "clean"],
-    ["unsaved", "clean"],
     ["error", "clean"],
     ["saved", "conflict"],
   ] satisfies Array<
@@ -432,6 +432,16 @@ describe("saving/saved status indicator (issue 2 fix)", () => {
         reviewHandoffState: "idle",
       }),
     ).toBe(true);
+  });
+
+  it("keeps handoff enabled for unsaved clean content so the click can flush first", () => {
+    expect(
+      isReviewHandoffDisabled({
+        saveState: "unsaved",
+        documentDiskChangeState: "clean",
+        reviewHandoffState: "idle",
+      }),
+    ).toBe(false);
   });
 
   it("allows handoff only when saved, conflict-free, and idle", () => {
@@ -592,7 +602,7 @@ describe("review handoff watcher affordance", () => {
       "review-handoff-button",
     );
     expect(doneReviewingButton).toBeDefined();
-    expect(container.textContent).toContain("Agent watching");
+    expect(container.textContent).toContain("Watcher attached");
 
     if (!doneReviewingButton) {
       throw new Error("I'm done button not found");

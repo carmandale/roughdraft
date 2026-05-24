@@ -37,6 +37,7 @@ import { cn } from "./lib/utils";
 import {
   type DocumentInteractionMode,
   type DocumentSaveController,
+  type ManualSaveResult,
   type DocumentSaveState,
   PageCard,
 } from "./PageCard";
@@ -49,7 +50,12 @@ type ReviewHandoffState =
   | "notifying"
   | "notified"
   | "undelivered"
+  | "unsupported"
   | "error";
+
+type CompleteReviewRequest = {
+  savedVersion?: string;
+};
 
 const documentInteractionModeOptions = [
   { value: "editing", label: "editing", Icon: PencilLine },
@@ -196,6 +202,10 @@ export function isReviewHandoffDisabled({
   );
 }
 
+function getSavedVersion(result: ManualSaveResult | undefined) {
+  return result?.status === "saved" ? result.savedVersion : undefined;
+}
+
 export function getReviewHandoffViewModel({
   state,
   watcherCount,
@@ -243,6 +253,16 @@ export function getReviewHandoffViewModel({
     };
   }
 
+  if (state === "unsupported") {
+    return {
+      buttonLabel: "Not sent",
+      inlineLabel: "Live review unsupported",
+      title: "Live review unsupported",
+      body: "This document backend cannot deliver saved review handoffs.",
+      tone: "warning" as const,
+    };
+  }
+
   if (state === "error") {
     return {
       buttonLabel: "Not sent",
@@ -280,7 +300,9 @@ interface DocumentWorkspaceProps {
   onReloadDocumentFromDisk: () => void | Promise<void>;
   onKeepEditingWithoutAutosave: () => void;
   onOverwriteDocumentOnDisk: () => void | Promise<void>;
-  onCompleteReview: () => Promise<CompleteReviewResult>;
+  onCompleteReview: (
+    request?: CompleteReviewRequest,
+  ) => Promise<CompleteReviewResult>;
   backend: StorageBackend | null;
 }
 
@@ -428,7 +450,9 @@ export function DocumentWorkspace({
         setReviewHandoffState("save_blocked");
         return;
       }
-      const result = await onCompleteReview();
+      const result = await onCompleteReview({
+        savedVersion: getSavedVersion(saveResult),
+      });
       if (result.delivered) {
         setReviewWatcherCount(0);
         setReviewHandoffState("notified");
@@ -437,6 +461,9 @@ export function DocumentWorkspace({
         result.reason === "save_blocked"
       ) {
         setReviewHandoffState("save_blocked");
+      } else if (result.reason === "not_supported") {
+        setReviewWatcherCount(0);
+        setReviewHandoffState("unsupported");
       } else {
         setReviewWatcherCount(0);
         setReviewHandoffState("undelivered");
@@ -473,6 +500,7 @@ export function DocumentWorkspace({
       ? Loader2
       : reviewHandoffState === "error" ||
           reviewHandoffState === "undelivered" ||
+          reviewHandoffState === "unsupported" ||
           reviewHandoffState === "save_blocked"
         ? AlertTriangle
         : CheckCheck;
@@ -529,6 +557,7 @@ export function DocumentWorkspace({
                     <Loader2 className="size-4 animate-spin" />
                   ) : reviewHandoffState === "error" ||
                     reviewHandoffState === "undelivered" ||
+                    reviewHandoffState === "unsupported" ||
                     reviewHandoffState === "save_blocked" ? (
                     <AlertTriangle className="size-4" />
                   ) : (
@@ -685,6 +714,7 @@ export function DocumentWorkspace({
                           <Loader2 className="size-[0.6rem] animate-spin" />
                         ) : reviewHandoffState === "error" ||
                           reviewHandoffState === "undelivered" ||
+                          reviewHandoffState === "unsupported" ||
                           reviewHandoffState === "save_blocked" ? (
                           <AlertTriangle className="size-[0.6rem]" />
                         ) : reviewWatcherCount > 0 ? (

@@ -101,11 +101,13 @@ Paragraph with **bold**, [link](https://example.com), `inline code`.
 | Document | Disk changed | Open local file, modify file externally while browser content is clean | `file-conflict-notice`, `file-conflict-action-reload`, `file-conflict-action-overwrite` | Banner title: `File changed on disk`. |
 | Document | Save conflict | Edit in browser, then modify file externally before autosave resolves | `file-conflict-notice`, `file-conflict-action-keep-editing` | Banner title: `Save conflict`; autosave pauses. |
 | Document | Autosave paused | Keep editing after conflict | `file-conflict-notice`, `file-conflict-action-overwrite` | Banner title: `Autosave paused`; no keep-editing action. |
-| Document | Review handoff idle | Open a local file while a watcher is connected | `review-handoff-button` | Header text: `Agent watching`. |
+| Document | Review handoff idle | Open a local file while a watcher is connected | `review-handoff-button` | Header text: `Watcher attached`. |
 | Document | Review handoff sending | Click handoff button while watcher is connected | `review-handoff-button` | Button label: `Sending`. |
-| Document | Review handoff sent | Successful handoff | `review-handoff-status` | Popover title: `Your agent is now working`. |
-| Document | Review handoff undelivered | Watcher disconnects before handoff | `review-handoff-status` | Popover title: `No agent is watching now`. |
-| Document | Review handoff error | Force handoff API error | `review-handoff-status` | Popover title: `Could not notify agent`. |
+| Document | Review handoff sent | Successful saved-proof handoff | `review-handoff-status` | Popover title: `Handoff delivered`. |
+| Document | Review handoff save proof missing | Click handoff before the saved review round exists | `review-handoff-status` | Popover title: `Save proof missing`. |
+| Document | Review handoff undelivered | Watcher disconnects before handoff | `review-handoff-status` | Popover title: `No watcher attached`. |
+| Document | Review handoff unsupported | Try handoff from preview/browser-storage backend | `review-handoff-status` | Popover title: `Live review unsupported`. |
+| Document | Review handoff error | Force handoff API error | `review-handoff-status` | Popover title: `Handoff failed`. |
 | Remote | Connected banner | Open with `?session=<id>&token=<token>` and remote capability enabled | `role=status`, `aria-label="Remote session connected"` | Requires remote backend support in `/api/status`. |
 | Remote | Disconnected banner | Drop remote session connection | `role=alert`, `aria-label="Remote session disconnected"` | Best captured with backend mocking. |
 | Editor | Selection menu | Select text in rich editor | `selection-menu` | Capture formatting buttons and comment/suggestion actions. |

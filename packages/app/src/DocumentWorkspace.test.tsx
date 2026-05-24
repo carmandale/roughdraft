@@ -65,13 +65,14 @@ describe("DocumentWorkspace review handoff", () => {
         watchers: [],
       }),
     });
+    const onCompleteReview = vi.fn(async () => {
+      events.push("complete");
+      return { delivered: true };
+    });
 
     await renderWorkspace({
       backend,
-      onCompleteReview: async () => {
-        events.push("complete");
-        return { delivered: true };
-      },
+      onCompleteReview,
     });
     await tick();
 
@@ -86,6 +87,7 @@ describe("DocumentWorkspace review handoff", () => {
     });
 
     expect(events).toEqual(["flush", "complete"]);
+    expect(onCompleteReview).toHaveBeenCalledWith({ savedVersion: "v2" });
   });
 
   it("uses watcher and save-proof copy without claiming the agent is working", () => {
@@ -97,10 +99,15 @@ describe("DocumentWorkspace review handoff", () => {
       state: "save_blocked",
       watcherCount: 1,
     });
+    const unsupported = getReviewHandoffViewModel({
+      state: "unsupported",
+      watcherCount: 0,
+    });
 
     expect(delivered.title).toBe("Handoff delivered");
     expect(blocked.inlineLabel).toBe("Save proof missing");
-    expect(JSON.stringify([delivered, blocked])).not.toContain(
+    expect(unsupported.title).toBe("Live review unsupported");
+    expect(JSON.stringify([delivered, blocked, unsupported])).not.toContain(
       "agent is now working",
     );
   });
@@ -110,7 +117,9 @@ describe("DocumentWorkspace review handoff", () => {
     onCompleteReview,
   }: {
     backend: StorageBackend;
-    onCompleteReview: () => Promise<{ delivered: boolean }>;
+    onCompleteReview: (request?: {
+      savedVersion?: string;
+    }) => Promise<{ delivered: boolean }>;
   }) {
     container = document.createElement("div");
     document.body.appendChild(container);

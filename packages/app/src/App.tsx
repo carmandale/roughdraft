@@ -1761,50 +1761,38 @@ export function App() {
     );
   }, [applyDocumentPage, handleDocumentSaveStateChange]);
 
-  const handleCompleteReview = useCallback(async () => {
-    const currentBackend = backendRef.current;
-    const currentPath = activeDocumentPathRef.current;
-    const currentDocument = documentPageRef.current;
-    if (!currentBackend || !currentPath || !currentDocument) {
-      return { delivered: false };
-    }
+  const handleCompleteReview = useCallback(
+    async (request?: { savedVersion?: string }) => {
+      const currentBackend = backendRef.current;
+      const currentPath = activeDocumentPathRef.current;
+      if (!currentBackend || !currentPath) {
+        return { delivered: false, reason: "not_supported" as const };
+      }
 
-    const content = documentDraftContentRef.current ?? currentDocument.content;
-    const expectedVersion = currentDocument.version;
-    const firstLine = content.split("\n")[0] || "";
-    const fallbackTitle =
-      currentDocument.id.split("/").at(-1) || currentDocument.id;
-    const title = firstLine.replace(/^#*\s*/, "") || fallbackTitle;
+      if (
+        !currentBackend.completeReview ||
+        !currentBackend.getReviewLoopStatus
+      ) {
+        return { delivered: false, reason: "not_supported" as const };
+      }
 
-    const savedDocument = (await currentBackend.saveMarkdownFile(
-      currentPath,
-      content,
-      expectedVersion,
-    )) ?? {
-      ...currentDocument,
-      content,
-      title,
-    };
+      const reviewLoopStatus =
+        await currentBackend.getReviewLoopStatus(currentPath);
+      const roundId = reviewLoopStatus?.openRound?.roundId;
+      const savedVersion = reviewLoopStatus?.openRound?.savedVersion;
+      const expectedSavedVersion = request?.savedVersion;
+      if (
+        !roundId ||
+        !savedVersion ||
+        (expectedSavedVersion && savedVersion !== expectedSavedVersion)
+      ) {
+        return { delivered: false, reason: "missing_review_round" as const };
+      }
 
-    applyDocumentPage(savedDocument);
-    documentDirtyRef.current = false;
-    setDocumentDiskChangeState("clean");
-
-    if (!currentBackend.completeReview) {
-      return { delivered: false, reason: "not_supported" as const };
-    }
-
-    const reviewLoopStatus = await currentBackend.getReviewLoopStatus?.(
-      currentPath,
-    );
-    const roundId = reviewLoopStatus?.openRound?.roundId;
-    const savedVersion = reviewLoopStatus?.openRound?.savedVersion;
-    if (!roundId || !savedVersion) {
-      return { delivered: false, reason: "missing_review_round" as const };
-    }
-
-    return currentBackend.completeReview(currentPath, { roundId });
-  }, [applyDocumentPage]);
+      return currentBackend.completeReview(currentPath, { roundId });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!backend?.watchMarkdownFile || !activeDocumentPath) return;
