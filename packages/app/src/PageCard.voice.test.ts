@@ -291,7 +291,13 @@ describe("PageCard voice review proof", () => {
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const fetchMock = vi.spyOn(globalThis, "fetch");
-    const createReviewRun = vi.fn(async () => createReviewRunProof());
+    let resolveReviewRun: (run: ReviewRunProof) => void = () => {};
+    const createReviewRun = vi.fn(
+      () =>
+        new Promise<ReviewRunProof>((resolve) => {
+          resolveReviewRun = resolve;
+        }),
+    );
     const recordReviewRunMilestone = vi.fn(async (runId: string) =>
       createReviewRunProof({ runId }),
     );
@@ -311,6 +317,11 @@ describe("PageCard voice review proof", () => {
     await waitUntil(() => expect(createReviewRun).toHaveBeenCalledTimes(1));
     nowMs = 1_200;
     await clearSelection(rendered.getEditor());
+
+    await act(async () => {
+      resolveReviewRun(createReviewRunProof());
+      await Promise.resolve();
+    });
 
     await waitUntil(() =>
       expect(recordReviewRunMilestone.mock.calls).toContainEqual([

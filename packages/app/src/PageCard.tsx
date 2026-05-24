@@ -879,6 +879,30 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     [backend],
   );
 
+  const recordCaptureReviewMilestone = useCallback(
+    (
+      captureContext: VoiceCaptureContext,
+      milestone: ReviewLoopMilestone,
+      options?: { durationMs?: number; errorClass?: string },
+    ) => {
+      if (captureContext.reviewRunId) {
+        void recordReviewMilestone(
+          captureContext.reviewRunId,
+          milestone,
+          options,
+        );
+        return;
+      }
+
+      if (captureContext.reviewRunPromise) {
+        void captureContext.reviewRunPromise.then((reviewRunId) =>
+          recordReviewMilestone(reviewRunId, milestone, options),
+        );
+      }
+    },
+    [recordReviewMilestone],
+  );
+
   const resolveFileUrl = useCallback(
     (path: string) => backend.resolveFileUrl(path),
     [backend],
@@ -1851,7 +1875,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           const elapsedMs = Date.now() - captureContext.startedAtMs;
           if (elapsedMs < 450) {
             captureContext.shouldTranscribe = false;
-            void recordReviewMilestone(captureContext.reviewRunId, "discarded");
+            recordCaptureReviewMilestone(captureContext, "discarded");
             setVoiceProgressStage(
               runId,
               "discarded",
@@ -1864,7 +1888,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             );
             }, 900);
           } else {
-            void recordReviewMilestone(captureContext.reviewRunId, "stopping", {
+            recordCaptureReviewMilestone(captureContext, "stopping", {
               durationMs: elapsedMs,
             });
             setVoiceProgressStage(
@@ -1891,7 +1915,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     }
     voicePinnedSelectionRef.current = null;
     setVoiceStatus("idle");
-  }, [recordReviewMilestone, setVoiceProgressStage]);
+  }, [recordCaptureReviewMilestone, setVoiceProgressStage]);
 
   const ensureVoiceCapture = useCallback(() => {
     if (mediaRecorderRef.current || !shouldRecordVoiceRef.current) return;
@@ -2021,7 +2045,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           const elapsedMs = Date.now() - captureContext.startedAtMs;
           if (elapsedMs < 450) {
             captureContext.shouldTranscribe = false;
-            void recordReviewMilestone(captureContext.reviewRunId, "discarded");
+            recordCaptureReviewMilestone(captureContext, "discarded");
             setVoiceProgressStage(
               captureContext.runId,
               "discarded",
@@ -2034,7 +2058,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
               );
             }, 900);
           } else {
-            void recordReviewMilestone(captureContext.reviewRunId, "stopping", {
+            recordCaptureReviewMilestone(captureContext, "stopping", {
               durationMs: elapsedMs,
             });
             setVoiceProgressStage(
@@ -2082,6 +2106,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     ensureVoiceCapture,
     getSelectionSnapshot,
     interactionMode,
+    recordCaptureReviewMilestone,
     recordReviewMilestone,
     setVoiceProgressStage,
     stopVoiceCapture,
