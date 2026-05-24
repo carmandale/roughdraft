@@ -9,7 +9,11 @@
       "!**/playwright-report",
       "!**/test-results",
       "!**/node_modules",
-      "!**/dist"
+      "!**/dist",
+      "!docs/goals/**/.goalbuddy-board",
+      "!specs/**/.codex-round*",
+      "!specs/**/.gate-*-timestamp",
+      "!specs/**/artifacts/codex-implement-approval-state.json"
     ]
   },
   "formatter": {

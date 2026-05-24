@@ -894,7 +894,9 @@ describe("cli", () => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const status = await fetch(
         `http://localhost:${persisted?.port}/api/review-events/status?projectPath=${encodeURIComponent(projectDir)}&path=draft.md`,
-      ).then((response) => response.json() as Promise<{ watcherCount: number }>);
+      ).then(
+        (response) => response.json() as Promise<{ watcherCount: number }>,
+      );
       if (status.watcherCount > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -911,18 +913,21 @@ describe("cli", () => {
     });
 
     const exitCode = await watchPromise;
-    const events = test.logs.map((line) =>
-      JSON.parse(line) as {
-        deliveryState: string;
-        event: { sequence: number; type: string; documentPath: string };
-        watcher: { sessionId: string; source: string };
-      },
+    const events = test.logs.map(
+      (line) =>
+        JSON.parse(line) as {
+          deliveryState: string;
+          event: { sequence: number; type: string; documentPath: string };
+          watcher: { sessionId: string; source: string };
+        },
     );
 
     expect(exitCode).toBe(0);
     expect(events).toHaveLength(2);
     expect(events.map((event) => event.event.sequence)).toEqual([1, 2]);
-    expect(new Set(events.map((event) => event.watcher.sessionId)).size).toBe(1);
+    expect(new Set(events.map((event) => event.watcher.sessionId)).size).toBe(
+      1,
+    );
     expect(events[0]).toMatchObject({
       deliveryState: "delivered",
       event: {

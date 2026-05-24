@@ -101,7 +101,7 @@ interface PageCardProps {
   selected?: boolean;
   layout?: "default" | "embedded-demo";
   focusRequestKey?: string | null;
-  onSave: (id: string, content: string) => Promise<Page | void>;
+  onSave: (id: string, content: string) => Promise<Page | undefined>;
   onSaveStateChange?: (state: DocumentSaveState) => void;
   editorViewMode?: EditorViewMode;
   interactionMode?: DocumentInteractionMode;
@@ -121,7 +121,7 @@ interface PageCardEditorSurfaceProps {
   selected: boolean;
   layout: "default" | "embedded-demo";
   focusRequestKey: string | null;
-  onSave: (id: string, content: string) => Promise<Page | void>;
+  onSave: (id: string, content: string) => Promise<Page | undefined>;
   onSaveStateChange: (state: DocumentSaveState) => void;
   editorViewMode: EditorViewMode;
   interactionMode: DocumentInteractionMode;
@@ -147,9 +147,7 @@ interface RichTextEditorSurfaceProps {
   backend: StorageBackend;
   onEditorReady?: (editor: Editor | null) => void;
   onCommentRailPresenceChange?: (hasCommentRailSpace: boolean) => void;
-  onVoiceActionApplied?: (
-    reviewRunId: string,
-  ) => Promise<ManualSaveResult>;
+  onVoiceActionApplied?: (reviewRunId: string) => Promise<ManualSaveResult>;
 }
 
 interface VoiceCaptureContext {
@@ -826,8 +824,9 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     "idle" | "recording" | "processing" | "paused" | "error"
   >("idle");
   const [voiceStatusMessage, setVoiceStatusMessage] = useState<string>("");
-  const [voiceProgress, setVoiceProgress] =
-    useState<VoiceProgressState | null>(null);
+  const [voiceProgress, setVoiceProgress] = useState<VoiceProgressState | null>(
+    null,
+  );
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceSelectionRef = useRef<VoiceSelectionSnapshot | null>(null);
@@ -1615,12 +1614,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
           }
         }
         setVoiceStatus(shouldRecordVoiceRef.current ? "recording" : "paused");
-        setVoiceProgressStage(
-          runId,
-          "saved",
-          "Feedback saved.",
-          startedAtMs,
-        );
+        setVoiceProgressStage(runId, "saved", "Feedback saved.", startedAtMs);
         window.setTimeout(() => {
           setVoiceProgress((current) =>
             current?.runId === runId ? null : current,
@@ -1862,17 +1856,18 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     [processVoiceUtterance, recordReviewMilestone, setVoiceProgressStage],
   );
 
-  const stopVoiceCapture = useCallback((cancel = false) => {
-    shouldRecordVoiceRef.current = false;
-    const recorder = mediaRecorderRef.current;
-    const captureContext = voiceCaptureContextRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      if (cancel && captureContext) {
-        captureContext.shouldTranscribe = false;
-        recordCaptureReviewMilestone(captureContext, "discarded");
-      }
-      const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
-      if (captureContext && !cancel) {
+  const stopVoiceCapture = useCallback(
+    (cancel = false) => {
+      shouldRecordVoiceRef.current = false;
+      const recorder = mediaRecorderRef.current;
+      const captureContext = voiceCaptureContextRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        if (cancel && captureContext) {
+          captureContext.shouldTranscribe = false;
+          recordCaptureReviewMilestone(captureContext, "discarded");
+        }
+        const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
+        if (captureContext && !cancel) {
           const elapsedMs = Date.now() - captureContext.startedAtMs;
           if (elapsedMs < 450) {
             captureContext.shouldTranscribe = false;
@@ -1886,7 +1881,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             window.setTimeout(() => {
               setVoiceProgress((current) =>
                 current?.runId === runId ? null : current,
-            );
+              );
             }, 900);
           } else {
             recordCaptureReviewMilestone(captureContext, "stopping", {
@@ -1900,23 +1895,25 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
             );
           }
         }
-      if (cancel) {
-        setVoiceProgress(null);
+        if (cancel) {
+          setVoiceProgress(null);
+        }
+        recorder.requestData();
+        recorder.stop();
       }
-      recorder.requestData();
-      recorder.stop();
-    }
-    mediaRecorderRef.current = null;
-    voiceCaptureContextRef.current = null;
-    if (mediaStreamRef.current) {
-      for (const track of mediaStreamRef.current.getTracks()) {
-        track.stop();
+      mediaRecorderRef.current = null;
+      voiceCaptureContextRef.current = null;
+      if (mediaStreamRef.current) {
+        for (const track of mediaStreamRef.current.getTracks()) {
+          track.stop();
+        }
+        mediaStreamRef.current = null;
       }
-      mediaStreamRef.current = null;
-    }
-    voicePinnedSelectionRef.current = null;
-    setVoiceStatus("idle");
-  }, [recordCaptureReviewMilestone, setVoiceProgressStage]);
+      voicePinnedSelectionRef.current = null;
+      setVoiceStatus("idle");
+    },
+    [recordCaptureReviewMilestone, setVoiceProgressStage],
+  );
 
   const ensureVoiceCapture = useCallback(() => {
     if (mediaRecorderRef.current || !shouldRecordVoiceRef.current) return;
@@ -2108,7 +2105,6 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     getSelectionSnapshot,
     interactionMode,
     recordCaptureReviewMilestone,
-    recordReviewMilestone,
     setVoiceProgressStage,
     stopVoiceCapture,
   ]);

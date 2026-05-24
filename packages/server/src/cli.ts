@@ -2189,7 +2189,9 @@ async function runWatchFollow(
           deps.log(
             `Review completed for ${payload.event?.documentPath ?? target.openPath}.`,
           );
-          deps.log(`Watcher session: ${payload.watcher?.sessionId ?? "unknown"}.`);
+          deps.log(
+            `Watcher session: ${payload.watcher?.sessionId ?? "unknown"}.`,
+          );
         }
       }
     }

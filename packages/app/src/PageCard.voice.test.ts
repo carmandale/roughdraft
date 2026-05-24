@@ -48,7 +48,9 @@ function createReviewRunProof(overrides: Partial<ReviewRunProof> = {}) {
   } satisfies ReviewRunProof;
 }
 
-function createBackend(overrides: Partial<StorageBackend> = {}): StorageBackend {
+function createBackend(
+  overrides: Partial<StorageBackend> = {},
+): StorageBackend {
   return {
     info: {
       kind: "local-files",

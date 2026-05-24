@@ -158,7 +158,9 @@ export class ApiBackend implements StorageBackend {
     });
 
     if (!res.ok) {
-      throw new Error(`Failed to record review milestone ${runId}: ${res.status}`);
+      throw new Error(
+        `Failed to record review milestone ${runId}: ${res.status}`,
+      );
     }
 
     return res.json();

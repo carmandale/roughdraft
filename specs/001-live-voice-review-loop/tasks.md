@@ -51,8 +51,8 @@ bead: bd-1ny1
 
 ## Group F: Verification And Implementation Receipt
 
-- [ ] T26: Run targeted server tests for the review-loop proof helper, review events, CLI follow, MCP scope, voice privacy, and file-change observation.
-- [ ] T27: Run targeted app tests for PageCard voice flow, save-before-handoff, DocumentWorkspace copy/status, evidence timeline, degraded backends, and reduced-motion/accessibility behavior.
-- [ ] T28: Run the narrow browser/integration test needed to prove local file save, handoff, follow watcher delivery, and post-handoff file-change observation work together.
-- [ ] T29: Run `pnpm check` after targeted tests are green.
+- [x] T26: Run targeted server tests for the review-loop proof helper, review events, CLI follow, MCP scope, voice privacy, and file-change observation.
+- [x] T27: Run targeted app tests for PageCard voice flow, save-before-handoff, DocumentWorkspace copy/status, evidence timeline, degraded backends, and reduced-motion/accessibility behavior.
+- [x] T28: Run the narrow browser/integration test needed to prove local file save, handoff, follow watcher delivery, and post-handoff file-change observation work together.
+- [x] T29: Run `pnpm check` after targeted tests are green.
 - [ ] T30: Create `specs/001-live-voice-review-loop/implement-receipt.md` with changed files, commands run, AVP/manual proof status, known limitations, and gate results, then run `gate.sh record implement` and `gate.sh verify implement`.

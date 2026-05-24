@@ -7,60 +7,62 @@ describe("ApiBackend review loop", () => {
   });
 
   it("uses proof-bearing review-loop endpoints for voice runs and handoff", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const body = init?.body ? JSON.parse(String(init.body)) : {};
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
 
-      if (url.startsWith("/api/review-loop/runs?")) {
-        expect(body.selection).toMatchObject({
-          from: 1,
-          to: 7,
-          selectedText: "target",
-        });
-        return jsonResponse({ runId: "run-1", roundId: null });
-      }
+        if (url.startsWith("/api/review-loop/runs?")) {
+          expect(body.selection).toMatchObject({
+            from: 1,
+            to: 7,
+            selectedText: "target",
+          });
+          return jsonResponse({ runId: "run-1", roundId: null });
+        }
 
-      if (url === "/api/review-loop/runs/run-1/milestones") {
-        expect(body).toMatchObject({ milestone: "save_started" });
-        return jsonResponse({ runId: "run-1", milestones: [body] });
-      }
+        if (url === "/api/review-loop/runs/run-1/milestones") {
+          expect(body).toMatchObject({ milestone: "save_started" });
+          return jsonResponse({ runId: "run-1", milestones: [body] });
+        }
 
-      if (url === "/api/review-loop/runs/run-1/saved-version") {
-        expect(body).toMatchObject({
-          path: "draft.md",
-          savedVersion: "v2",
-        });
-        return jsonResponse({
-          run: { runId: "run-1", savedVersion: "v2" },
-          round: { roundId: "round-1", savedVersion: "v2" },
-        });
-      }
+        if (url === "/api/review-loop/runs/run-1/saved-version") {
+          expect(body).toMatchObject({
+            path: "draft.md",
+            savedVersion: "v2",
+          });
+          return jsonResponse({
+            run: { runId: "run-1", savedVersion: "v2" },
+            round: { roundId: "round-1", savedVersion: "v2" },
+          });
+        }
 
-      if (url.startsWith("/api/review-loop/status?")) {
-        return jsonResponse({
-          openRound: { roundId: "round-1", savedVersion: "v2" },
-          activeRuns: [],
-          recentHandoffs: [],
-        });
-      }
+        if (url.startsWith("/api/review-loop/status?")) {
+          return jsonResponse({
+            openRound: { roundId: "round-1", savedVersion: "v2" },
+            activeRuns: [],
+            recentHandoffs: [],
+          });
+        }
 
-      if (url.startsWith("/api/review-loop/complete?")) {
-        expect(body).toMatchObject({ path: "draft.md", roundId: "round-1" });
-        return jsonResponse({
-          handoff: { handoffId: "handoff-1", roundId: "round-1" },
-          reviewEvent: {
-            delivered: true,
-            event: { type: "review.completed", savedVersion: "v2" },
-            delivery: {
-              state: "delivered",
-              watchers: [{ sessionId: "watcher-1", source: "cli-follow" }],
+        if (url.startsWith("/api/review-loop/complete?")) {
+          expect(body).toMatchObject({ path: "draft.md", roundId: "round-1" });
+          return jsonResponse({
+            handoff: { handoffId: "handoff-1", roundId: "round-1" },
+            reviewEvent: {
+              delivered: true,
+              event: { type: "review.completed", savedVersion: "v2" },
+              delivery: {
+                state: "delivered",
+                watchers: [{ sessionId: "watcher-1", source: "cli-follow" }],
+              },
             },
-          },
-        });
-      }
+          });
+        }
 
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
     global.fetch = fetchMock;
     const backend = new ApiBackend({
       kind: "local-files",
@@ -84,7 +86,9 @@ describe("ApiBackend review loop", () => {
     ).resolves.toMatchObject({
       round: { roundId: "round-1", savedVersion: "v2" },
     });
-    await expect(backend.getReviewLoopStatus("draft.md")).resolves.toMatchObject({
+    await expect(
+      backend.getReviewLoopStatus("draft.md"),
+    ).resolves.toMatchObject({
       openRound: { roundId: "round-1", savedVersion: "v2" },
     });
     await expect(

@@ -104,7 +104,8 @@ export async function completeSavedReviewRound(
     return { delivered: false, reason: "not_supported" };
   }
 
-  const reviewLoopStatus = await currentBackend.getReviewLoopStatus(currentPath);
+  const reviewLoopStatus =
+    await currentBackend.getReviewLoopStatus(currentPath);
   const roundId = reviewLoopStatus?.openRound?.roundId;
   const savedVersion = reviewLoopStatus?.openRound?.savedVersion;
   const expectedSavedVersion = request?.savedVersion;

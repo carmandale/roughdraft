@@ -472,7 +472,7 @@ interface DocumentWorkspaceProps {
   documentFilenameLabel: string;
   documentEditorViewMode: DocumentEditorViewMode;
   onDocumentEditorViewModeChange: (mode: DocumentEditorViewMode) => void;
-  onSaveDocument: (id: string, content: string) => Promise<Page | void>;
+  onSaveDocument: (id: string, content: string) => Promise<Page | undefined>;
   onDocumentSaveStateChange: (state: DocumentSaveState) => void;
   onDocumentDirtyStateChange: (isDirty: boolean) => void;
   onDocumentLocalContentChange: (markdown: string) => void;

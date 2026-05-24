@@ -19,3 +19,8 @@ sandbox
 .context/
 /roughdraft.json
 .compound-engineering/*.local.yaml
+
+# Workflow command runtime state
+specs/**/.codex-round*.persist.lock
+specs/**/.gate-*-timestamp
+specs/**/artifacts/codex-implement-approval-state.json

@@ -199,7 +199,7 @@ export function RoughdraftFormatDemo() {
               layout="embedded-demo"
               backend={demoBackend}
               interactionMode="editing"
-              onSave={async () => {}}
+              onSave={async () => undefined}
               onLocalContentChange={handleResultChange}
               saveBlocked
             />
