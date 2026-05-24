@@ -44,8 +44,9 @@ roughdraft-dev-roughdraft watch /tmp/roughdraft-avp-live-voice-loop.md --follow 
 
 - Active watcher log: `/tmp/roughdraft-avp-live-voice-loop.watch.ndjson`
 - Active watcher error log: `/tmp/roughdraft-avp-live-voice-loop.watch.err`
-- Active watcher session: `c58dce62-d9ab-4279-a05c-771b5e9f7145`
-- Server status: running at `http://localhost:7373`; watcher status confirmed at `2026-05-24T22:51:20.953Z`.
+- Active watcher tmux session: `roughdraft-avp-watch`
+- Active watcher session: `00a9294b-8a69-4ac7-a6b9-0d2f8b52131c`
+- Server status: running at `http://localhost:7373`; watcher status confirmed at `2026-05-24T22:54:46.168Z`.
 
 ## Trial Script
 
