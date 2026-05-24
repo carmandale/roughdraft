@@ -5,7 +5,7 @@ goal:
   slug: "live-voice-review-loop"
   kind: existing_plan
   tranche: "Complete Dale workflow from issue-backed shaping through verified implementation/finalize for the live voice review loop."
-  status: active
+  status: blocked
   execution_lane: dale_workflow
   intake:
     original_request: "GoalBuddy proceed with using issue and produce this spec, then run the actual workflow."
@@ -140,7 +140,7 @@ workflow:
       purpose: "Close the bead, create final handoff, commit, and push."
       when: "Run only after $code-verify approval."
 
-active_task: T005
+active_task: null
 
 tasks:
   - id: T001
@@ -192,10 +192,14 @@ tasks:
   - id: T005
     type: pm
     assignee: PM
-    status: active
+    status: blocked
     reasoning_hint: high
     objective: "Run $codex-implement specs/001-live-voice-review-loop/ after plan review approves."
-    receipt: null
+    receipt: "docs/goals/live-voice-review-loop/notes/T005-codex-implement.md"
+    awaiting_operator: true
+    pause_goal: true
+    blocker: "Awaiting Apple Vision Pro two-round manual endpoint trial result for the select-to-record/release-to-act flow."
+    resume_condition: "Dale reports the AVP trial result, or explicitly authorizes recording AVP unavailable/inconclusive as the final implementation blocker."
   - id: T006
     type: pm
     assignee: PM
