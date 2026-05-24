@@ -70,6 +70,7 @@ interface CreateAppOptions {
   fetchImpl?: typeof fetch;
   packageName?: string;
   remoteDocumentToken?: string;
+  reviewLoopFileObservationTimeoutMs?: number;
 }
 
 interface CreateAppResult {
@@ -195,6 +196,7 @@ function coerceVoiceActionResult(
 const REMOTE_SESSION_TTL_MS = 5 * 60 * 1000;
 const REMOTE_SESSION_SWEEP_INTERVAL_MS = 60 * 1000;
 const REMOTE_SESSION_KEEPALIVE_MS = 15 * 1000;
+const REVIEW_LOOP_FILE_OBSERVATION_TIMEOUT_MS = 2 * 60 * 1000;
 
 let nextOpenRequestClientId = 1;
 
@@ -329,6 +331,17 @@ function fileVersionFromFile(filePath: string): string {
   const content = fs.readFileSync(filePath);
   const stats = fs.statSync(filePath);
   return fileVersionFromContent(stats, content);
+}
+
+function redactedErrorClass(error: unknown): string {
+  const code = (error as { code?: unknown })?.code;
+  if (typeof code === "string" && code.trim().length > 0) {
+    return code.slice(0, 80);
+  }
+  if (error instanceof Error && error.name.trim().length > 0) {
+    return error.name.slice(0, 80);
+  }
+  return typeof error;
 }
 
 function markdownPageFromFile(
@@ -851,10 +864,14 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
     options.remoteDocumentToken.length > 0
       ? options.remoteDocumentToken
       : null;
+  const reviewLoopFileObservationTimeoutMs =
+    options.reviewLoopFileObservationTimeoutMs ??
+    REVIEW_LOOP_FILE_OBSERVATION_TIMEOUT_MS;
   const app = express();
   const openRequestClients = new Set<OpenRequestClient>();
   const reviewEvents = new ReviewEventQueue();
   const reviewLoop = new ReviewLoopProofHelper();
+  const reviewObservationStops = new Map<string, () => void>();
   const remoteSessions = new Map<string, RemoteSession>();
   const voiceSessions = new Map<string, VoiceTranscriptionSession>();
 
@@ -902,6 +919,86 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
   remoteSessionSweeper.unref?.();
 
   app.use(express.json({ limit: "50mb" }));
+
+  function stopReviewFileObservation(handoffId: string): void {
+    const stop = reviewObservationStops.get(handoffId);
+    if (!stop) return;
+    stop();
+  }
+
+  function startReviewFileObservation(handoff: {
+    handoffId: string;
+    documentPath: string;
+  }): void {
+    stopReviewFileObservation(handoff.handoffId);
+
+    let stopped = false;
+    let timeout: NodeJS.Timeout | null = null;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      fs.unwatchFile(handoff.documentPath, listener);
+      reviewObservationStops.delete(handoff.handoffId);
+    };
+
+    const markTerminal = (
+      state: "timeout" | "disconnected" | "failed",
+      errorClass?: string,
+    ) => {
+      try {
+        reviewLoop.markFileChangeObservation(handoff.handoffId, state, {
+          errorClass,
+        });
+      } finally {
+        stop();
+      }
+    };
+
+    const listener = (current: fs.Stats, previous: fs.Stats) => {
+      if (
+        current.mtimeMs === previous.mtimeMs &&
+        current.size === previous.size &&
+        current.nlink === previous.nlink
+      ) {
+        return;
+      }
+
+      if (current.nlink === 0 || !fs.existsSync(handoff.documentPath)) {
+        markTerminal("disconnected");
+        return;
+      }
+
+      try {
+        const version = fileVersionFromFile(handoff.documentPath);
+        const observed = reviewLoop.recordFileChangeForDocument(
+          handoff.documentPath,
+          version,
+        );
+        if (observed?.fileChangeObservation.state === "changed") {
+          stop();
+        }
+      } catch (error) {
+        markTerminal("failed", redactedErrorClass(error));
+      }
+    };
+
+    fs.watchFile(handoff.documentPath, { interval: 500 }, listener);
+    reviewObservationStops.set(handoff.handoffId, stop);
+
+    if (reviewLoopFileObservationTimeoutMs <= 0) {
+      markTerminal("timeout");
+      return;
+    }
+
+    timeout = setTimeout(() => {
+      markTerminal("timeout");
+    }, reviewLoopFileObservationTimeoutMs);
+    timeout.unref?.();
+  }
 
   function requestedProjectPath(req: Request): string | null {
     const queryPath =
@@ -1217,7 +1314,8 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
         relativePath: target.relativePath,
         preActionVersion: fileVersionFromFile(target.absolutePath),
         selection: {
-          from: typeof selection?.from === "number" ? selection.from : undefined,
+          from:
+            typeof selection?.from === "number" ? selection.from : undefined,
           to: typeof selection?.to === "number" ? selection.to : undefined,
           selectedText,
         },
@@ -1300,9 +1398,32 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
   });
 
   app.get("/api/review-loop/status", (req, res) => {
-    const target = markdownPathFromRequest(req, res);
-    if (!target) return;
-    res.json(reviewLoop.statusForDocument(target.absolutePath));
+    const projectDir = projectDirFromRequest(req, res);
+    if (!projectDir) return;
+
+    const relativePath =
+      typeof req.query.path === "string" ? req.query.path : "";
+    const absolutePath = ensureProjectPath(projectDir, relativePath);
+    if (!absolutePath?.toLowerCase().endsWith(".md")) {
+      res.status(404).json({ error: "Markdown file not found" });
+      return;
+    }
+
+    const status = reviewLoop.statusForDocument(absolutePath);
+    const hasReviewLoopProof =
+      status.openRound ||
+      status.activeRuns.length > 0 ||
+      status.recentHandoffs.length > 0;
+    if (!fs.existsSync(absolutePath) && !hasReviewLoopProof) {
+      res.status(404).json({ error: "Markdown file not found" });
+      return;
+    }
+
+    res.json({
+      ...status,
+      projectPath: status.projectPath ?? projectDir,
+      relativePath: status.relativePath ?? relativePath,
+    });
   });
 
   app.post("/api/review-loop/complete", (req, res) => {
@@ -1334,13 +1455,16 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
         handoffAt: handoff.handoffAt,
         summary: index.summary,
       });
-      res.status(201).json({ handoff, reviewEvent: result });
+      const deliveredHandoff = reviewLoop.recordHandoffDelivery(
+        handoff.handoffId,
+        result.delivery,
+      );
+      startReviewFileObservation(deliveredHandoff);
+      res.status(201).json({ handoff: deliveredHandoff, reviewEvent: result });
     } catch (error) {
       res.status(409).json({
         error:
-          error instanceof Error
-            ? error.message
-            : "review round not completed",
+          error instanceof Error ? error.message : "review round not completed",
       });
     }
   });

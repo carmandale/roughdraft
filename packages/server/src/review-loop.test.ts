@@ -74,9 +74,7 @@ describe("ReviewLoopProofHelper", () => {
 
     expect(() =>
       helper.completeRound("/tmp/project/draft.md", saved.round.roundId),
-    ).toThrow(
-      "review round has unsaved runs",
-    );
+    ).toThrow("review round has unsaved runs");
   });
 
   it("review-loop lets discarded saving runs stop blocking a saved round", () => {
@@ -112,7 +110,9 @@ describe("ReviewLoopProofHelper", () => {
     );
 
     expect(handoff.runIds).toEqual([savedRun.runId]);
-    expect(helper.statusForDocument("/tmp/project/draft.md").openRound).toBeNull();
+    expect(
+      helper.statusForDocument("/tmp/project/draft.md").openRound,
+    ).toBeNull();
   });
 
   it("review-loop prunes expired saving runs out of the open round", () => {
@@ -152,5 +152,59 @@ describe("ReviewLoopProofHelper", () => {
     expect(() =>
       helper.completeRound("/tmp/project/draft.md", saved.round.roundId),
     ).not.toThrow();
+  });
+
+  it("review-loop records only the first later Markdown version after handoff", () => {
+    let now = Date.parse("2026-05-24T13:00:00.000Z");
+    let id = 0;
+    const helper = new ReviewLoopProofHelper({
+      now: () => now,
+      idFactory: () => `id-${++id}`,
+    });
+    const run = helper.createRun({
+      documentPath: "/tmp/project/draft.md",
+      projectPath: "/tmp/project",
+      relativePath: "draft.md",
+      preActionVersion: "v1",
+      selection: {
+        selectedText: "selected text",
+      },
+    });
+    const saved = helper.markSavedVersion(run.runId, "v2");
+    const handoff = helper.completeRound(
+      "/tmp/project/draft.md",
+      saved.round.roundId,
+      { currentVersion: "v2" },
+    );
+
+    expect(handoff.fileChangeObservation).toMatchObject({
+      state: "waiting",
+      baselineVersion: "v2",
+      startedAt: "2026-05-24T13:00:00.000Z",
+    });
+    expect(
+      helper.recordFileChangeForDocument("/tmp/project/draft.md", "v2"),
+    ).toBeNull();
+
+    now += 1500;
+    const observed = helper.recordFileChangeForDocument(
+      "/tmp/project/draft.md",
+      "v3",
+    );
+    expect(observed?.fileChangeObservation).toMatchObject({
+      state: "changed",
+      observedVersion: "v3",
+      observedAt: "2026-05-24T13:00:01.500Z",
+      elapsedMs: 1500,
+    });
+
+    now += 1500;
+    helper.recordFileChangeForDocument("/tmp/project/draft.md", "v4");
+    const status = helper.statusForDocument("/tmp/project/draft.md");
+    expect(status.recentHandoffs[0]?.fileChangeObservation).toMatchObject({
+      state: "changed",
+      observedVersion: "v3",
+      elapsedMs: 1500,
+    });
   });
 });

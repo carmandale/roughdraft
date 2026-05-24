@@ -41,7 +41,12 @@ import {
   type DocumentSaveState,
   PageCard,
 } from "./PageCard";
-import type { CompleteReviewResult, Page, StorageBackend } from "./storage";
+import type {
+  CompleteReviewResult,
+  Page,
+  ReviewLoopStatus,
+  StorageBackend,
+} from "./storage";
 
 type DiskChangeState = "clean" | "changed" | "conflict" | "paused";
 type ReviewHandoffState =
@@ -285,6 +290,182 @@ export function getReviewHandoffViewModel({
   };
 }
 
+type ReviewEvidenceTone = "neutral" | "success" | "warning" | "danger";
+
+interface ReviewEvidenceEntry {
+  label: string;
+  value: string;
+}
+
+export interface ReviewEvidenceViewModel {
+  state: string;
+  tone: ReviewEvidenceTone;
+  title: string;
+  body: string;
+  entries: ReviewEvidenceEntry[];
+}
+
+export function getReviewEvidenceViewModel(
+  status: ReviewLoopStatus | null | undefined,
+  nowMs = Date.now(),
+): ReviewEvidenceViewModel | null {
+  const handoff = status?.recentHandoffs.at(-1);
+  if (!handoff) return null;
+
+  const observation = handoff.fileChangeObservation;
+  const elapsed =
+    observation.elapsedMs ??
+    elapsedSince(observation.startedAt || handoff.handoffAt, nowMs);
+  const watcher = handoff.delivery?.watchers[0];
+  const entries: ReviewEvidenceEntry[] = [
+    { label: "Run", value: handoff.runIds.map(compactId).join(", ") || "none" },
+    { label: "Round", value: compactId(handoff.roundId) },
+    { label: "Handoff", value: compactId(handoff.handoffId) },
+    { label: "Saved", value: compactVersion(handoff.savedVersion) },
+    {
+      label: "Watcher",
+      value: watcher
+        ? `${watcher.source} ${compactId(watcher.sessionId)}`
+        : handoff.delivery?.state === "no_watcher"
+          ? "none delivered"
+          : "unknown",
+    },
+    { label: "Handoff at", value: compactTime(handoff.handoffAt) },
+    { label: "Elapsed", value: formatElapsed(elapsed) },
+  ];
+
+  if (observation.observedVersion) {
+    entries.push({
+      label: "File change",
+      value: compactVersion(observation.observedVersion),
+    });
+  }
+  if (observation.observedAt) {
+    entries.push({
+      label: "Observed at",
+      value: compactTime(observation.observedAt),
+    });
+  }
+  if (observation.endedAt && !observation.observedAt) {
+    entries.push({
+      label: "Ended at",
+      value: compactTime(observation.endedAt),
+    });
+  }
+  if (observation.errorClass) {
+    entries.push({ label: "Error class", value: observation.errorClass });
+  }
+
+  if (observation.state === "changed") {
+    return {
+      state: observation.state,
+      tone: "success",
+      title: "Markdown file changed after handoff",
+      body: "A later Markdown version was observed. Roughdraft is not claiming who authored it.",
+      entries,
+    };
+  }
+
+  if (observation.state === "timeout") {
+    return {
+      state: observation.state,
+      tone: "warning",
+      title: "No file change observed",
+      body: "The handoff was saved, but no later Markdown file version arrived before the observation window ended.",
+      entries,
+    };
+  }
+
+  if (observation.state === "disconnected") {
+    return {
+      state: observation.state,
+      tone: "warning",
+      title: "File-change watch disconnected",
+      body: "Roughdraft lost the file-change watch before a later Markdown version was observed.",
+      entries,
+    };
+  }
+
+  if (observation.state === "failed") {
+    return {
+      state: observation.state,
+      tone: "danger",
+      title: "File-change observation failed",
+      body: "Roughdraft stopped observing this handoff and kept only a redacted failure class.",
+      entries,
+    };
+  }
+
+  return {
+    state: observation.state,
+    tone: "neutral",
+    title: "Waiting for file change",
+    body: "Roughdraft is watching for a later Markdown version before claiming anything after the handoff.",
+    entries,
+  };
+}
+
+function elapsedSince(startedAt: string, nowMs: number): number {
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return 0;
+  return Math.max(0, nowMs - started);
+}
+
+function compactId(value: string): string {
+  return value.length > 10 ? value.slice(0, 8) : value;
+}
+
+function compactVersion(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 16)}...` : value;
+}
+
+function compactTime(value: string): string {
+  return value.length >= 19 ? `${value.slice(11, 19)}Z` : value;
+}
+
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+function ReviewLoopEvidence({ view }: { view: ReviewEvidenceViewModel }) {
+  return (
+    <div
+      data-testid="review-loop-evidence"
+      role="status"
+      aria-label={view.title}
+      data-state={view.state}
+      className={cn(
+        "w-[min(18rem,calc(100vw-1rem))] rounded-[7px] border bg-white/95 px-3 py-2 text-left shadow-[0_10px_30px_rgba(0,0,0,0.16)] backdrop-blur dark:bg-slate-950/95",
+        view.tone === "success" &&
+          "border-emerald-200 text-emerald-950 dark:border-emerald-700 dark:text-emerald-100",
+        view.tone === "warning" &&
+          "border-amber-200 text-amber-950 dark:border-amber-700 dark:text-amber-100",
+        view.tone === "danger" &&
+          "border-red-200 text-red-950 dark:border-red-800 dark:text-red-100",
+        view.tone === "neutral" &&
+          "border-stone-200 text-stone-950 dark:border-slate-700 dark:text-slate-100",
+      )}
+    >
+      <div className="text-xs font-semibold leading-5">{view.title}</div>
+      <p className="mt-0.5 text-[0.68rem] leading-4 text-stone-600 dark:text-slate-300">
+        {view.body}
+      </p>
+      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 font-mono text-[0.6rem] leading-4 text-stone-500 dark:text-slate-400">
+        {view.entries.map((entry) => (
+          <div key={entry.label} className="contents">
+            <dt className="whitespace-nowrap">{entry.label}</dt>
+            <dd className="min-w-0 truncate text-right" title={entry.value}>
+              {entry.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 interface DocumentWorkspaceProps {
   documentPage: Page | null;
   activeDocumentPath: string | null;
@@ -330,6 +511,8 @@ export function DocumentWorkspace({
   const [reviewHandoffState, setReviewHandoffState] =
     useState<ReviewHandoffState>("idle");
   const [reviewWatcherCount, setReviewWatcherCount] = useState(0);
+  const [reviewLoopStatus, setReviewLoopStatus] =
+    useState<ReviewLoopStatus | null>(null);
   const sawNoWatcherAfterNotifiedRef = useRef(false);
   const saveControllerRef = useRef<DocumentSaveController | null>(null);
 
@@ -358,6 +541,7 @@ export function DocumentWorkspace({
     const documentIdentity = `${activeDocumentPath ?? ""}:${documentPage?.id ?? ""}`;
     if (!documentIdentity) return;
     setReviewHandoffState("idle");
+    setReviewLoopStatus(null);
   }, [activeDocumentPath, documentPage?.id]);
 
   useEffect(() => {
@@ -382,6 +566,34 @@ export function DocumentWorkspace({
 
     void refreshWatchStatus();
     const interval = window.setInterval(refreshWatchStatus, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeDocumentPath, backend]);
+
+  useEffect(() => {
+    if (!backend?.getReviewLoopStatus || !activeDocumentPath) {
+      setReviewLoopStatus(null);
+      return;
+    }
+
+    let cancelled = false;
+    const refreshReviewLoopStatus = async () => {
+      try {
+        const status = await backend.getReviewLoopStatus?.(activeDocumentPath);
+        if (!cancelled) {
+          setReviewLoopStatus(status ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setReviewLoopStatus(null);
+        }
+      }
+    };
+
+    void refreshReviewLoopStatus();
+    const interval = window.setInterval(refreshReviewLoopStatus, 1500);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
@@ -487,6 +699,7 @@ export function DocumentWorkspace({
     documentDiskChangeState === "clean"
       ? null
       : conflictNoticeCopy[documentDiskChangeState];
+  const reviewEvidenceView = getReviewEvidenceViewModel(reviewLoopStatus);
   const showReviewHandoffButton =
     !!activeDocumentPath &&
     (reviewWatcherCount > 0 || reviewHandoffState !== "idle");
@@ -581,6 +794,9 @@ export function DocumentWorkspace({
             saveState={saveState}
             diskChangeState={documentDiskChangeState}
           />
+        ) : null}
+        {reviewEvidenceView ? (
+          <ReviewLoopEvidence view={reviewEvidenceView} />
         ) : null}
       </div>
       {conflictNotice ? (

@@ -37,11 +37,11 @@ bead: bd-1ny1
 
 ## Group D: File-Change Observation And Evidence UI
 
-- [ ] T18: Add server tests for post-handoff file-change observation that ignores own-save/stale versions and records only later Markdown versions as `Markdown file changed after handoff`.
-- [ ] T19: Implement bounded post-handoff observation in the proof helper/server so the first later file-change proof for the active handoff is captured independently of the app reload/conflict path, then stopped or pruned.
-- [ ] T20: Add app tests for waiting, file-changed-after-handoff, timeout, disconnected, and failed observation states with elapsed time and reduced-motion-safe rendering.
-- [ ] T21: Build the compact document-level timeline/evidence surface with run id, round id, handoff id, saved version, watcher provenance, file-change version, timestamps, durations, and redacted failure details.
-- [ ] T22: Ensure local-storage, preview, and remote backends degrade honestly without claiming watcher delivery, saved proof, or live-loop support.
+- [x] T18: Add server tests for post-handoff file-change observation that ignores own-save/stale versions and records only later Markdown versions as `Markdown file changed after handoff`.
+- [x] T19: Implement bounded post-handoff observation in the proof helper/server so the first later file-change proof for the active handoff is captured independently of the app reload/conflict path, then stopped or pruned.
+- [x] T20: Add app tests for waiting, file-changed-after-handoff, timeout, disconnected, and failed observation states with elapsed time and reduced-motion-safe rendering.
+- [x] T21: Build the compact document-level timeline/evidence surface with run id, round id, handoff id, saved version, watcher provenance, file-change version, timestamps, durations, and redacted failure details.
+- [x] T22: Ensure local-storage, preview, and remote backends degrade honestly without claiming watcher delivery, saved proof, or live-loop support.
 
 ## Group E: AVP Endpoint Trial And Manual Acceptance
 

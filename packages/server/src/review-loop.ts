@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import type { ReviewEventDelivery } from "./review-events.js";
 
 export type ReviewLoopMilestone =
   | "recording_started"
@@ -78,6 +79,26 @@ export interface ReviewHandoffProof {
   runIds: string[];
   savedVersion: string;
   handoffAt: string;
+  delivery?: ReviewEventDelivery;
+  fileChangeObservation: ReviewFileChangeObservation;
+}
+
+export type ReviewFileChangeObservationState =
+  | "waiting"
+  | "changed"
+  | "timeout"
+  | "disconnected"
+  | "failed";
+
+export interface ReviewFileChangeObservation {
+  state: ReviewFileChangeObservationState;
+  baselineVersion: string;
+  startedAt: string;
+  observedVersion?: string;
+  observedAt?: string;
+  endedAt?: string;
+  elapsedMs?: number;
+  errorClass?: string;
 }
 
 export interface ReviewLoopStatus {
@@ -228,7 +249,10 @@ export class ReviewLoopProofHelper {
     if (unsaved.length > 0 || !round.savedVersion) {
       throw new Error("review round has unsaved runs");
     }
-    if (options.currentVersion && round.savedVersion !== options.currentVersion) {
+    if (
+      options.currentVersion &&
+      round.savedVersion !== options.currentVersion
+    ) {
       throw new Error("saved version no longer matches current file version");
     }
 
@@ -246,9 +270,88 @@ export class ReviewLoopProofHelper {
       runIds: [...round.runIds],
       savedVersion: round.savedVersion,
       handoffAt: isoTime(now),
+      fileChangeObservation: {
+        state: "waiting",
+        baselineVersion: round.savedVersion,
+        startedAt: isoTime(now),
+      },
     };
     this.recentHandoffById.set(handoff.handoffId, handoff);
     this.pruneRecentHandoffs();
+    return structuredClone(handoff);
+  }
+
+  recordHandoffDelivery(
+    handoffId: string,
+    delivery: ReviewEventDelivery,
+  ): ReviewHandoffProof {
+    const handoff = this.requireHandoff(handoffId);
+    handoff.delivery = structuredClone(delivery);
+    return structuredClone(handoff);
+  }
+
+  recordFileChangeForDocument(
+    documentPath: string,
+    version: string,
+    options: { at?: number } = {},
+  ): ReviewHandoffProof | null {
+    this.pruneExpired();
+    const normalizedPath = normalizeDocumentPath(documentPath);
+    const handoff = [...this.recentHandoffById.values()]
+      .filter(
+        (candidate) =>
+          candidate.documentPath === normalizedPath &&
+          candidate.fileChangeObservation.state === "waiting",
+      )
+      .at(-1);
+    if (!handoff) return null;
+    return this.recordHandoffFileChange(handoff.handoffId, version, options);
+  }
+
+  recordHandoffFileChange(
+    handoffId: string,
+    version: string,
+    options: { at?: number } = {},
+  ): ReviewHandoffProof | null {
+    const trimmedVersion = version.trim();
+    if (!trimmedVersion) {
+      throw new Error("file change version is required");
+    }
+    const handoff = this.requireHandoff(handoffId);
+    const observation = handoff.fileChangeObservation;
+    if (observation.state !== "waiting") return structuredClone(handoff);
+    if (
+      trimmedVersion === handoff.savedVersion ||
+      trimmedVersion === observation.baselineVersion
+    ) {
+      return null;
+    }
+
+    const at = options.at ?? this.now();
+    observation.state = "changed";
+    observation.observedVersion = trimmedVersion;
+    observation.observedAt = isoTime(at);
+    observation.endedAt = isoTime(at);
+    observation.elapsedMs = elapsedMs(observation.startedAt, at);
+    return structuredClone(handoff);
+  }
+
+  markFileChangeObservation(
+    handoffId: string,
+    state: Exclude<ReviewFileChangeObservationState, "waiting" | "changed">,
+    options: { at?: number; errorClass?: string } = {},
+  ): ReviewHandoffProof {
+    const handoff = this.requireHandoff(handoffId);
+    const observation = handoff.fileChangeObservation;
+    if (observation.state !== "waiting") return structuredClone(handoff);
+
+    const at = options.at ?? this.now();
+    observation.state = state;
+    observation.endedAt = isoTime(at);
+    observation.elapsedMs = elapsedMs(observation.startedAt, at);
+    if (options.errorClass) {
+      observation.errorClass = options.errorClass.slice(0, 80);
+    }
     return structuredClone(handoff);
   }
 
@@ -333,6 +436,14 @@ export class ReviewLoopProofHelper {
     return run;
   }
 
+  private requireHandoff(handoffId: string): ReviewHandoffProof {
+    const handoff = this.recentHandoffById.get(handoffId);
+    if (!handoff) {
+      throw new Error("review handoff not found");
+    }
+    return handoff;
+  }
+
   private pruneExpired(): void {
     const now = this.now();
     for (const [runId, run] of this.activeRunsById) {
@@ -351,4 +462,10 @@ export class ReviewLoopProofHelper {
       this.recentHandoffById.delete(handoffId);
     }
   }
+}
+
+function elapsedMs(startedAt: string, endedAt: number): number {
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return 0;
+  return Math.max(0, endedAt - started);
 }

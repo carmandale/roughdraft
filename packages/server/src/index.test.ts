@@ -7,6 +7,8 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./index";
 
+type TestApp = Parameters<typeof request>[0];
+
 describe("createApp", () => {
   let projectDir: string;
   let homeDir: string;
@@ -51,6 +53,91 @@ describe("createApp", () => {
     fs.rmSync(projectDir, { recursive: true, force: true });
     fs.rmSync(homeDir, { recursive: true, force: true });
   });
+
+  async function completeReviewForObservation(app: TestApp) {
+    const filePath = path.join(projectDir, "draft.md");
+    fs.writeFileSync(filePath, "# Draft\n");
+
+    const readResponse = await request(app).get("/api/markdown-file").query({
+      projectPath: projectDir,
+      path: "draft.md",
+    });
+    const runResponse = await request(app)
+      .post("/api/review-loop/runs")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        selection: { selectedText: "Draft" },
+      });
+    expect(runResponse.status).toBe(201);
+    const saveStartedResponse = await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/milestones`)
+      .send({ milestone: "save_started" });
+    expect(saveStartedResponse.status).toBe(200);
+    const saveResponse = await request(app)
+      .put("/api/markdown-file")
+      .query({ projectPath: projectDir, path: "draft.md" })
+      .send({
+        content: "# Draft\n\n{>>Review comment<<}\n",
+        expectedVersion: readResponse.body.version,
+      });
+    expect(saveResponse.status).toBe(200);
+    await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/saved-version`)
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        savedVersion: saveResponse.body.version,
+      })
+      .expect(200);
+
+    const completedResponse = await request(app)
+      .post("/api/review-loop/complete")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        roundId: saveStartedResponse.body.roundId,
+      });
+    expect(completedResponse.status).toBe(201);
+
+    return {
+      filePath,
+      saveVersion: saveResponse.body.version as string,
+      completedResponse,
+    };
+  }
+
+  async function waitForObservationState(
+    app: TestApp,
+    state: "changed" | "timeout" | "disconnected" | "failed",
+  ) {
+    let observedStatus: {
+      recentHandoffs?: Array<{
+        fileChangeObservation?: {
+          state?: string;
+          observedVersion?: string;
+          elapsedMs?: number;
+          errorClass?: string;
+        };
+      }>;
+    } | null = null;
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      observedStatus = await request(app)
+        .get("/api/review-loop/status")
+        .query({ projectPath: projectDir, path: "draft.md" })
+        .then((response) => response.body);
+      if (
+        observedStatus?.recentHandoffs?.[0]?.fileChangeObservation?.state ===
+        state
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return observedStatus?.recentHandoffs?.[0]?.fileChangeObservation;
+  }
 
   it("creates a markdown page on disk", async () => {
     const { app } = createApp({
@@ -714,9 +801,7 @@ describe("createApp", () => {
       watcherStatus = await request(app)
         .get("/api/review-events/status")
         .query({ projectPath: projectDir, path: "draft.md" })
-        .then(
-          (response) => response.body as { watcherCount: number },
-        );
+        .then((response) => response.body as { watcherCount: number });
       if (watcherStatus.watcherCount > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -769,6 +854,88 @@ describe("createApp", () => {
           handoffAt: completedResponse.body.handoff.handoffAt,
         },
       ],
+    });
+  });
+
+  it("observes the first later Markdown file version after review handoff", async () => {
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      reviewLoopFileObservationTimeoutMs: 5_000,
+    });
+    const { filePath, saveVersion, completedResponse } =
+      await completeReviewForObservation(app);
+    expect(completedResponse.body.handoff.fileChangeObservation).toMatchObject({
+      state: "waiting",
+      baselineVersion: saveVersion,
+    });
+    expect(completedResponse.body.handoff.delivery).toMatchObject({
+      state: "no_watcher",
+      watchers: [],
+    });
+
+    fs.writeFileSync(
+      filePath,
+      "# Draft\n\n{>>Review comment<<}\n\nAgent note.\n",
+    );
+
+    const observation = await waitForObservationState(app, "changed");
+    expect(observation).toMatchObject({
+      state: "changed",
+      observedVersion: expect.any(String),
+      elapsedMs: expect.any(Number),
+    });
+    expect(observation?.observedVersion).not.toBe(saveVersion);
+  });
+
+  it("marks post-handoff file observation timed out when no later version arrives", async () => {
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      reviewLoopFileObservationTimeoutMs: 1,
+    });
+    await completeReviewForObservation(app);
+
+    const observation = await waitForObservationState(app, "timeout");
+    expect(observation).toMatchObject({
+      state: "timeout",
+      elapsedMs: expect.any(Number),
+    });
+  });
+
+  it("marks post-handoff file observation disconnected when the Markdown file disappears", async () => {
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      reviewLoopFileObservationTimeoutMs: 5_000,
+    });
+    const { filePath } = await completeReviewForObservation(app);
+
+    fs.rmSync(filePath);
+
+    const observation = await waitForObservationState(app, "disconnected");
+    expect(observation).toMatchObject({
+      state: "disconnected",
+      elapsedMs: expect.any(Number),
+    });
+  });
+
+  it("marks post-handoff file observation failed with a redacted error class", async () => {
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      reviewLoopFileObservationTimeoutMs: 5_000,
+    });
+    const { filePath } = await completeReviewForObservation(app);
+
+    fs.rmSync(filePath);
+    fs.mkdirSync(filePath);
+
+    const observation = await waitForObservationState(app, "failed");
+    expect(observation).toMatchObject({
+      state: "failed",
+      elapsedMs: expect.any(Number),
+      errorClass: "EISDIR",
     });
   });
 

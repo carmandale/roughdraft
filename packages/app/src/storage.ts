@@ -123,6 +123,26 @@ export interface ReviewHandoffProof {
   runIds: string[];
   savedVersion: string;
   handoffAt: string;
+  delivery?: ReviewEventDelivery;
+  fileChangeObservation: ReviewFileChangeObservation;
+}
+
+export type ReviewFileChangeObservationState =
+  | "waiting"
+  | "changed"
+  | "timeout"
+  | "disconnected"
+  | "failed";
+
+export interface ReviewFileChangeObservation {
+  state: ReviewFileChangeObservationState;
+  baselineVersion: string;
+  startedAt: string;
+  observedVersion?: string;
+  observedAt?: string;
+  endedAt?: string;
+  elapsedMs?: number;
+  errorClass?: string;
 }
 
 export interface ReviewLoopStatus {

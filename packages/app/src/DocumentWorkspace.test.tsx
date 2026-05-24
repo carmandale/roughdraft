@@ -3,12 +3,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DocumentWorkspace,
+  getReviewEvidenceViewModel,
   getReviewHandoffViewModel,
 } from "./DocumentWorkspace";
-import type { Page, StorageBackend } from "./storage";
+import type { Page, ReviewLoopStatus, StorageBackend } from "./storage";
 
 const pageCardHarness = vi.hoisted(() => ({
-  flushSave: vi.fn(async () => ({ status: "saved" as const, savedVersion: "v2" })),
+  flushSave: vi.fn(async () => ({
+    status: "saved" as const,
+    savedVersion: "v2",
+  })),
   saveState: "saved",
 }));
 
@@ -22,7 +26,9 @@ vi.mock("./PageCard", async () => {
       onSaveStateChange?: (state: string) => void;
     }) => {
       React.useEffect(() => {
-        props.onSaveControllerChange?.({ flushSave: pageCardHarness.flushSave });
+        props.onSaveControllerChange?.({
+          flushSave: pageCardHarness.flushSave,
+        });
         props.onSaveStateChange?.(pageCardHarness.saveState);
         return () => props.onSaveControllerChange?.(null as never);
       }, [props]);
@@ -112,6 +118,62 @@ describe("DocumentWorkspace review handoff", () => {
     );
   });
 
+  it("maps file-change observation states to honest evidence copy and elapsed time", () => {
+    const cases = [
+      {
+        state: "waiting" as const,
+        title: "Waiting for file change",
+        elapsed: "5.0s",
+      },
+      {
+        state: "changed" as const,
+        title: "Markdown file changed after handoff",
+        elapsed: "2.5s",
+      },
+      {
+        state: "timeout" as const,
+        title: "No file change observed",
+        elapsed: "30s",
+      },
+      {
+        state: "disconnected" as const,
+        title: "File-change watch disconnected",
+        elapsed: "3.0s",
+      },
+      {
+        state: "failed" as const,
+        title: "File-change observation failed",
+        elapsed: "4.0s",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const view = getReviewEvidenceViewModel(
+        reviewLoopStatusFor(testCase.state),
+        Date.parse("2026-05-24T13:00:05.000Z"),
+      );
+      expect(view?.title).toBe(testCase.title);
+      expect(view?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ label: "Run", value: "run-1111" }),
+          expect.objectContaining({ label: "Round", value: "round-111" }),
+          expect.objectContaining({ label: "Handoff", value: "handoff-" }),
+          expect.objectContaining({ label: "Saved", value: "version-v2" }),
+          expect.objectContaining({
+            label: "Watcher",
+            value: "cli-follow watcher-",
+          }),
+          expect.objectContaining({
+            label: "Elapsed",
+            value: testCase.elapsed,
+          }),
+        ]),
+      );
+      expect(JSON.stringify(view)).not.toContain("agent replied");
+      expect(JSON.stringify(view)).not.toContain("agent is working");
+    }
+  });
+
   it("shows explicit unsupported feedback when the backend cannot deliver live handoff", async () => {
     const backend = createBackend({
       getReviewWatchStatus: async () => ({
@@ -140,6 +202,31 @@ describe("DocumentWorkspace review handoff", () => {
     });
 
     expect(container?.textContent).toContain("Live review unsupported");
+  });
+
+  it("renders compact review-loop evidence without motion classes", async () => {
+    const backend = createBackend({
+      getReviewWatchStatus: async () => ({
+        watching: true,
+        watcherCount: 1,
+        watchers: [],
+      }),
+      getReviewLoopStatus: async () => reviewLoopStatusFor("waiting"),
+    });
+
+    await renderWorkspace({
+      backend,
+      onCompleteReview: vi.fn(async () => ({ delivered: false })),
+    });
+    await tick();
+
+    const evidence = container?.querySelector<HTMLElement>(
+      "[data-testid='review-loop-evidence']",
+    );
+    expect(evidence).toBeTruthy();
+    expect(evidence?.textContent).toContain("Waiting for file change");
+    expect(evidence?.textContent).toContain("version-v2");
+    expect(evidence?.outerHTML).not.toContain("animate-");
   });
 
   async function renderWorkspace({
@@ -185,6 +272,76 @@ const TEST_PAGE: Page = {
   content: "# Draft\n",
   version: "v1",
 };
+
+function reviewLoopStatusFor(
+  state: "waiting" | "changed" | "timeout" | "disconnected" | "failed",
+): ReviewLoopStatus {
+  const startedAt = "2026-05-24T13:00:00.000Z";
+  return {
+    documentPath: "/tmp/project/draft.md",
+    projectPath: "/tmp/project",
+    relativePath: "draft.md",
+    openRound: null,
+    activeRuns: [],
+    recentHandoffs: [
+      {
+        handoffId: "handoff-111111111",
+        roundId: "round-111",
+        documentPath: "/tmp/project/draft.md",
+        projectPath: "/tmp/project",
+        relativePath: "draft.md",
+        runIds: ["run-1111"],
+        savedVersion: "version-v2",
+        handoffAt: startedAt,
+        delivery: {
+          state: "delivered",
+          watchers: [
+            {
+              sessionId: "watcher-111111",
+              source: "cli-follow",
+              documentPath: "/tmp/project/draft.md",
+              startedAt: "2026-05-24T12:59:59.000Z",
+              lastDeliveredAt: "2026-05-24T13:00:00.000Z",
+              state: "delivered",
+            },
+          ],
+        },
+        fileChangeObservation: {
+          state,
+          baselineVersion: "version-v2",
+          startedAt,
+          ...(state === "changed"
+            ? {
+                observedVersion: "version-v3",
+                observedAt: "2026-05-24T13:00:02.500Z",
+                endedAt: "2026-05-24T13:00:02.500Z",
+                elapsedMs: 2500,
+              }
+            : {}),
+          ...(state === "timeout"
+            ? {
+                endedAt: "2026-05-24T13:00:30.000Z",
+                elapsedMs: 30_000,
+              }
+            : {}),
+          ...(state === "disconnected"
+            ? {
+                endedAt: "2026-05-24T13:00:03.000Z",
+                elapsedMs: 3000,
+              }
+            : {}),
+          ...(state === "failed"
+            ? {
+                endedAt: "2026-05-24T13:00:04.000Z",
+                elapsedMs: 4000,
+                errorClass: "EACCES",
+              }
+            : {}),
+        },
+      },
+    ],
+  };
+}
 
 function createBackend(
   overrides: Partial<StorageBackend> = {},
