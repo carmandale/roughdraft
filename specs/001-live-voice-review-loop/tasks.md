@@ -45,7 +45,7 @@ bead: bd-1ny1
 
 ## Group E: AVP Endpoint Trial And Manual Acceptance
 
-- [ ] T23: Create `specs/001-live-voice-review-loop/avp-endpoint-trial.md` with endpoint variant, endpoint action, discoverability, transcript behavior, timing evidence, two-round watcher proof, post-handoff file-change/reply observation, and selected/inconclusive result fields.
+- [x] T23: Create `specs/001-live-voice-review-loop/avp-endpoint-trial.md` with endpoint variant, endpoint action, discoverability, transcript behavior, timing evidence, two-round watcher proof, post-handoff file-change/reply observation, and selected/inconclusive result fields.
 - [ ] T24: Prototype the default select-to-record/release-to-act endpoint through the new timeline; if AVP testing shows it is unreliable, implement the smallest visible Done/Cancel fallback needed to complete the trial.
 - [ ] T25: Run or coordinate the AVP two-round manual trial and record the result; if AVP access or endpoint reliability blocks completion, record the blocker and do not mark implementation complete.
 
