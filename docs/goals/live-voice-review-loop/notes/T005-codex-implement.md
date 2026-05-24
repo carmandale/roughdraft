@@ -28,7 +28,11 @@ Dale reports the AVP trial result for `http://localhost:7373/?path=%2Ftmp%2Froug
 - AVP trial artifact: `specs/001-live-voice-review-loop/avp-endpoint-trial.md`
 - Local integration proof: `specs/001-live-voice-review-loop/integration-proof.md`
 - Tasks now checked through `T29`; `T25` and `T30` remain unchecked in `specs/001-live-voice-review-loop/tasks.md`.
-- Commit pushed to fork branch: `fc57577 test(spec): record live review loop verification`
+- Local verification commit pushed to fork branch: `fc57577 test(spec): record live review loop verification`
+- Board pause commit pushed to fork branch: `d67b19a docs(goal): pause live voice loop on avp trial`
+- Latest pushed branch head after refreshing the AVP watcher artifact: `68db421 docs(spec): record tmux avp watcher`
+- Current trial URL: `http://localhost:7373/?path=%2Ftmp%2Froughdraft-avp-live-voice-loop.md`
+- Current watcher: tmux session `roughdraft-avp-watch`, watcher session `00a9294b-8a69-4ac7-a6b9-0d2f8b52131c`
 
 ## Automated Verification Completed
 

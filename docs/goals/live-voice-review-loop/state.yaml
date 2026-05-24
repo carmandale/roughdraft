@@ -67,12 +67,18 @@ goal:
           - "docs/goals/live-voice-review-loop/notes/T003-codex-plan.md"
       - id: OC3
         description: "Implementation changes app/CLI/server behavior, not just docs."
-        status: pending
-        evidence: []
+        status: done
+        evidence:
+          - "specs/001-live-voice-review-loop/tasks.md"
+          - "specs/001-live-voice-review-loop/integration-proof.md"
+          - "commit fc57577 test(spec): record live review loop verification"
       - id: OC4
         description: "Verification proves no false agent-working state and at least two handoff events through continuous watch."
-        status: pending
-        evidence: []
+        status: done
+        evidence:
+          - "specs/001-live-voice-review-loop/integration-proof.md"
+          - "specs/001-live-voice-review-loop/tasks.md"
+          - "commit fc57577 test(spec): record live review loop verification"
       - id: OC5
         description: "Finalize closes the bead only after full user outcome is met or truthfully blocked."
         status: pending
