@@ -1869,6 +1869,7 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     if (recorder && recorder.state !== "inactive") {
       if (cancel && captureContext) {
         captureContext.shouldTranscribe = false;
+        recordCaptureReviewMilestone(captureContext, "discarded");
       }
       const runId = captureContext?.runId ?? ++voiceProgressRunRef.current;
       if (captureContext && !cancel) {

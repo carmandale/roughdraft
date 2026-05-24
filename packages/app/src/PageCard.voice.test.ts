@@ -335,6 +335,45 @@ describe("PageCard voice review proof", () => {
     expect(rendered.onSave).not.toHaveBeenCalled();
   });
 
+  it("discards pending review runs when Escape cancels before run creation resolves", async () => {
+    let resolveReviewRun: (run: ReviewRunProof) => void = () => {};
+    const createReviewRun = vi.fn(
+      () =>
+        new Promise<ReviewRunProof>((resolve) => {
+          resolveReviewRun = resolve;
+        }),
+    );
+    const recordReviewRunMilestone = vi.fn(async (runId: string) =>
+      createReviewRunProof({ runId }),
+    );
+    const backend = createBackend({
+      createReviewRun,
+      recordReviewRunMilestone,
+    });
+    const rendered = await renderPageCard({ backend });
+
+    await selectText(rendered.getEditor(), "target");
+    await waitUntil(() => expect(createReviewRun).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveReviewRun(createReviewRunProof());
+      await Promise.resolve();
+    });
+
+    await waitUntil(() =>
+      expect(recordReviewRunMilestone.mock.calls).toContainEqual([
+        "run-1",
+        "discarded",
+        undefined,
+      ]),
+    );
+    expect(rendered.onSave).not.toHaveBeenCalled();
+  });
+
   it("records, transcribes, applies, saves, and binds saved version proof on selection release", async () => {
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
