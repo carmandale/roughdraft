@@ -134,7 +134,7 @@ interface VoiceActionResult {
 
 function hasExplicitEditIntent(utterance: string): boolean {
   const normalized = utterance.toLowerCase();
-  return /\b(delete|remove|replace|rewrite|reword|change|add|insert|move|cut|shorten|expand|merge|split|fix)\b/.test(
+  return /\b(delete|remove|replace|rewrite|reword|rephrase|change|add|insert|move|cut|shorten|expand|merge|split|fix)\b/.test(
     normalized,
   );
 }
@@ -175,6 +175,7 @@ const REMOTE_SESSION_KEEPALIVE_MS = 15 * 1000;
 let nextOpenRequestClientId = 1;
 
 const ROUGHDRAFT_OPENROUTER_API_KEY_ENV = "ROUGHDRAFT_OPENROUTER_API_KEY";
+const OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY";
 const ROUGHDRAFT_LLM_MODEL_ENV = "ROUGHDRAFT_LLM_MODEL";
 const DEFAULT_VOICE_MODEL = "openai/gpt-4o-mini";
 const ROUGHDRAFT_VOICE_MODEL_DIR_ENV = "ROUGHDRAFT_VOICE_MODEL_DIR";
@@ -212,6 +213,24 @@ function summarizeApiKey(value: string | undefined): {
     prefix: trimmed.slice(0, 12),
     length: trimmed.length,
   };
+}
+
+function resolveOpenRouterApiKey(): { envKey: string; value: string } {
+  const roughdraftSpecific =
+    process.env[ROUGHDRAFT_OPENROUTER_API_KEY_ENV]?.trim() ?? "";
+  if (roughdraftSpecific.length > 0) {
+    return {
+      envKey: ROUGHDRAFT_OPENROUTER_API_KEY_ENV,
+      value: roughdraftSpecific,
+    };
+  }
+
+  const generic = process.env[OPENROUTER_API_KEY_ENV]?.trim() ?? "";
+  if (generic.length > 0) {
+    return { envKey: OPENROUTER_API_KEY_ENV, value: generic };
+  }
+
+  return { envKey: ROUGHDRAFT_OPENROUTER_API_KEY_ENV, value: "" };
 }
 
 function remoteSessionVersion(content: string): string {
@@ -536,11 +555,12 @@ async function inferVoiceActionWithOpenRouter(
   selectedText: string,
   fetchImpl: typeof fetch,
 ): Promise<VoiceActionResult> {
-  const apiKey = process.env[ROUGHDRAFT_OPENROUTER_API_KEY_ENV];
+  const apiKey = resolveOpenRouterApiKey();
   const model =
     process.env[ROUGHDRAFT_LLM_MODEL_ENV]?.trim() || DEFAULT_VOICE_MODEL;
-  const keySummary = summarizeApiKey(apiKey);
+  const keySummary = summarizeApiKey(apiKey.value);
   logVoice("inference.config", {
+    apiKeyEnvKey: apiKey.envKey,
     apiKeyPresent: keySummary.present,
     apiKeyPrefix: keySummary.prefix,
     apiKeyLength: keySummary.length,
@@ -548,9 +568,9 @@ async function inferVoiceActionWithOpenRouter(
     utteranceChars: utterance.length,
     selectedTextChars: selectedText.length,
   });
-  if (!apiKey || apiKey.trim().length === 0) {
+  if (apiKey.value.length === 0) {
     logVoice("inference.fallback.no_api_key", {
-      envKey: ROUGHDRAFT_OPENROUTER_API_KEY_ENV,
+      envKeys: [ROUGHDRAFT_OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV],
     });
     return {
       action: "comment",
@@ -565,7 +585,7 @@ async function inferVoiceActionWithOpenRouter(
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey.value}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -575,7 +595,7 @@ async function inferVoiceActionWithOpenRouter(
           {
             role: "system",
             content:
-              "You convert dictated review feedback into a single JSON object with keys: action, content, replacementText, confidence, uncertain. action must be one of comment|suggestion_addition|suggestion_deletion|suggestion_substitution. Default to action=comment unless the utterance is an explicit edit instruction (delete/remove/replace/add/rewrite/etc). Questions, reactions, uncertainty, or discussion should be comment.",
+              "You convert dictated review feedback into a single JSON object with keys: action, content, replacementText, confidence, uncertain. action must be one of comment|suggestion_addition|suggestion_deletion|suggestion_substitution. Default to action=comment unless the utterance is an explicit edit instruction (delete/remove/replace/add/rewrite/rephrase/etc). Questions, reactions, uncertainty, or discussion should be comment.",
           },
           {
             role: "user",
@@ -1808,14 +1828,14 @@ export async function createServer(
     remoteDocumentToken:
       remoteDocumentToken.length > 0 ? remoteDocumentToken : undefined,
   });
-  const startupKeySummary = summarizeApiKey(
-    process.env[ROUGHDRAFT_OPENROUTER_API_KEY_ENV],
-  );
+  const startupApiKey = resolveOpenRouterApiKey();
+  const startupKeySummary = summarizeApiKey(startupApiKey.value);
   logVoice("server.env.voice", {
     cwd: process.cwd(),
     envModelRaw: process.env[ROUGHDRAFT_LLM_MODEL_ENV] ?? null,
     envModelEffective:
       process.env[ROUGHDRAFT_LLM_MODEL_ENV]?.trim() || DEFAULT_VOICE_MODEL,
+    envApiKeyKey: startupApiKey.envKey,
     envApiKeyPresent: startupKeySummary.present,
     envApiKeyPrefix: startupKeySummary.prefix,
     envApiKeyLength: startupKeySummary.length,

@@ -113,6 +113,11 @@ cp .env.example .env
 # edit .env and set required values (for example ROUGHDRAFT_OPENROUTER_API_KEY)
 ```
 
+Voice intent inference uses `ROUGHDRAFT_OPENROUTER_API_KEY` when set, and
+falls back to the standard `OPENROUTER_API_KEY` from the server environment.
+Without either key, dictated audio can still transcribe, but Roughdraft marks the
+result `[uncertain]` and saves the transcript as a plain comment.
+
 `./scripts/setup.sh` installs workspace dependencies and builds the app and server. `./scripts/run.sh` serves the built app at `http://localhost:7373`.
 
 The two scripts coordinate through a lock file, so it's safe to start `./scripts/run.sh` while `./scripts/setup.sh` is still in progress. `run` will wait for setup to finish, or trigger setup itself if nothing has been built yet.

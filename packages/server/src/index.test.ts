@@ -11,6 +11,8 @@ describe("createApp", () => {
   let projectDir: string;
   let homeDir: string;
   let previousVoiceTranscribeCommand: string | undefined;
+  let previousRoughdraftOpenRouterApiKey: string | undefined;
+  let previousOpenRouterApiKey: string | undefined;
   const serverRoot = path.resolve(
     fileURLToPath(new URL("../../..", import.meta.url)),
   );
@@ -20,7 +22,12 @@ describe("createApp", () => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "roughdraft-home-"));
     previousVoiceTranscribeCommand =
       process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND;
+    previousRoughdraftOpenRouterApiKey =
+      process.env.ROUGHDRAFT_OPENROUTER_API_KEY;
+    previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
     delete process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND;
+    delete process.env.ROUGHDRAFT_OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
   });
 
   afterEach(() => {
@@ -29,6 +36,17 @@ describe("createApp", () => {
     } else {
       process.env.ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND =
         previousVoiceTranscribeCommand;
+    }
+    if (previousRoughdraftOpenRouterApiKey === undefined) {
+      delete process.env.ROUGHDRAFT_OPENROUTER_API_KEY;
+    } else {
+      process.env.ROUGHDRAFT_OPENROUTER_API_KEY =
+        previousRoughdraftOpenRouterApiKey;
+    }
+    if (previousOpenRouterApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
     }
     fs.rmSync(projectDir, { recursive: true, force: true });
     fs.rmSync(homeDir, { recursive: true, force: true });
@@ -566,6 +584,120 @@ describe("createApp", () => {
 
     expect(stopResponse.status).toBe(200);
     expect(stopResponse.body).toEqual({ transcript: "spoken feedback" });
+  });
+
+  it("uses OPENROUTER_API_KEY for voice action inference", async () => {
+    fs.writeFileSync(path.join(projectDir, "draft.md"), "# Draft\n");
+    process.env.OPENROUTER_API_KEY = "generic-test-key";
+    let fetchCalled = false;
+
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      fetchImpl: async (_input, init) => {
+        fetchCalled = true;
+        const headers = init?.headers as Record<string, string>;
+        expect(headers.Authorization).toBe("Bearer generic-test-key");
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "suggestion_substitution",
+                    content: "Replace the selected text.",
+                    replacementText: "A clearer sentence.",
+                    confidence: 0.9,
+                  }),
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    });
+
+    const response = await request(app)
+      .post("/api/voice/process")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        utterance: "Rephrase this sentence.",
+        selection: {
+          from: 0,
+          to: 14,
+          selectedText: "muddy sentence",
+        },
+      });
+
+    expect(fetchCalled).toBe(true);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      action: "suggestion_substitution",
+      content: "Replace the selected text.",
+      replacementText: "A clearer sentence.",
+      confidence: 0.9,
+      uncertain: false,
+    });
+  });
+
+  it("prefers ROUGHDRAFT_OPENROUTER_API_KEY over the generic OpenRouter key", async () => {
+    fs.writeFileSync(path.join(projectDir, "draft.md"), "# Draft\n");
+    process.env.OPENROUTER_API_KEY = "generic-test-key";
+    process.env.ROUGHDRAFT_OPENROUTER_API_KEY = "specific-test-key";
+
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      fetchImpl: async (_input, init) => {
+        const headers = init?.headers as Record<string, string>;
+        expect(headers.Authorization).toBe("Bearer specific-test-key");
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "comment",
+                    content: "Looks good.",
+                    confidence: 0.8,
+                  }),
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    });
+
+    const response = await request(app)
+      .post("/api/voice/process")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        utterance: "Looks good.",
+        selection: {
+          from: 0,
+          to: 5,
+          selectedText: "Draft",
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      action: "comment",
+      content: "Looks good.",
+      confidence: 0.8,
+      uncertain: false,
+    });
   });
 
   it("lists directories from the home directory when no path is provided", async () => {
