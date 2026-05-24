@@ -258,10 +258,25 @@ ROUGHDRAFT_LLM_MODEL
 ROUGHDRAFT_VOICE_TRANSCRIBE_COMMAND
   Local transcription command template used by `/api/voice/session/stop`.
   Supported placeholders: `{audio}`, `{output}`, `{outputDir}`, `{model}`.
+  On Apple Silicon, `./scripts/transcribe-parakeet.sh {audio} {output}` uses
+  FluidAudio/Parakeet directly and reuses Hex's installed Parakeet model cache
+  when it is present. It requires `ffmpeg` so browser WebM recordings can be
+  normalized before CoreML transcription.
+
+ROUGHDRAFT_PARAKEET_MODEL
+  Optional Parakeet model override for `scripts/transcribe-parakeet.sh`.
+  Supported values: `v2`, `v3`, `parakeet-tdt-0.6b-v2-coreml`,
+  `parakeet-tdt-0.6b-v3-coreml`. Defaults to Hex's selected model, then v2.
+
+ROUGHDRAFT_PARAKEET_MODEL_DIR
+  Optional Parakeet model directory override for `scripts/transcribe-parakeet.sh`.
+  Defaults to Hex's FluidAudio model cache when present, then FluidAudio's
+  normal Application Support cache.
 
 ROUGHDRAFT_VOICE_MODEL_DIR
   Optional model directory used to resolve `{model}`. Defaults to
-  `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels`.
+  `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels`
+  for Whisper-compatible commands.
 ```
 
 Development-only environment variables:

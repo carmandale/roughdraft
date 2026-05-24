@@ -713,13 +713,14 @@ async function transcribeLocalAudioFromBuffer(
   fs.writeFileSync(audioPath, audioBuffer);
 
   const { command, args } = parseCommandTemplate(commandTemplate);
-  const modelPath = resolveVoiceModelPath();
+  const usesModelPlaceholder = args.some((arg) => arg.includes("{model}"));
+  const modelPath = usesModelPlaceholder ? resolveVoiceModelPath() : null;
   const resolvedArgs = args.map((arg) =>
     arg
       .replaceAll("{audio}", audioPath)
       .replaceAll("{output}", outputPath)
       .replaceAll("{outputDir}", outputDir)
-      .replaceAll("{model}", modelPath),
+      .replaceAll("{model}", modelPath ?? ""),
   );
   logVoice("transcribe.exec.start", {
     command,
