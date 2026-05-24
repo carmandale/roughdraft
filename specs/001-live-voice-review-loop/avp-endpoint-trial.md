@@ -44,8 +44,8 @@ roughdraft-dev-roughdraft watch /tmp/roughdraft-avp-live-voice-loop.md --follow 
 
 - Active watcher log: `/tmp/roughdraft-avp-live-voice-loop.watch.ndjson`
 - Active watcher error log: `/tmp/roughdraft-avp-live-voice-loop.watch.err`
-- Active watcher session: `63295cde-7f2e-4962-9842-1b693e67a184`
-- Server status: restarted after Group D build; watcher status confirmed at `2026-05-24T16:12:27.513Z`.
+- Active watcher session: `486dcca0-2a99-49a2-9462-dcb71da46439`
+- Server status: restarted after Group D build; watcher status confirmed at `2026-05-24T16:15:04.763Z`.
 
 ## Trial Script
 
@@ -59,6 +59,31 @@ roughdraft-dev-roughdraft watch /tmp/roughdraft-avp-live-voice-loop.md --follow 
 8. Simulate or allow an external Markdown edit after the handoff.
 9. Confirm the evidence surface says `Markdown file changed after handoff` with elapsed timing, not that an agent replied.
 10. Repeat steps 2-9 for a second review round without restarting the watcher.
+
+## Desktop Prototype Evidence
+
+The default endpoint has been prototyped through the current app timeline in automated desktop component coverage:
+
+```bash
+pnpm --filter @roughdraft/app exec vitest run src/PageCard.voice.test.ts --testNamePattern "records, transcribes, applies, saves, and binds saved version proof on selection release|covers the select-to-record loop states"
+```
+
+Result: passed at 2026-05-24T16:14:45Z with 1 file passed, 2 tests passed, 4 skipped by filter.
+
+What this proves:
+
+- The timeline stages include listening, stopping, transcribing, transcript received, classifying, applying, saving, saved, failed, stale, and discarded.
+- Selecting text starts a voice review run.
+- Clearing the selection releases the recording path.
+- The transcript is processed into review feedback.
+- The edit is saved and the saved file version is bound to review-loop proof.
+
+What this does not prove:
+
+- Apple Vision Pro selection/release ergonomics.
+- Apple Vision Pro microphone permission behavior.
+- Discoverability of release/clear-selection as the stop action.
+- The two-round manual acceptance outcome.
 
 ## Required Observations
 
@@ -106,4 +131,4 @@ roughdraft-dev-roughdraft watch /tmp/roughdraft-avp-live-voice-loop.md --follow 
 - Endpoint decision: pending
 - Trial result: pending
 - If inconclusive, reason: pending
-- If blocked, blocker and resume condition: pending
+- If blocked, blocker and resume condition: awaiting Apple Vision Pro two-round manual report from Dale; desktop prototype is supportive only and does not close the AVP requirement.
