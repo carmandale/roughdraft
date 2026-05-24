@@ -699,6 +699,29 @@ describe("createApp", () => {
       .send({ projectPath: projectDir, path: "draft.md", roundId: "stale" });
     expect(staleRoundResponse.status).toBe(409);
 
+    const waitingPromise = request(app)
+      .post("/api/review-events/watch")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        timeoutSeconds: 1,
+        batchWindowSeconds: 0,
+        source: "test-review-loop-complete",
+      })
+      .then((response) => response);
+    let watcherStatus: { watcherCount: number } | null = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      watcherStatus = await request(app)
+        .get("/api/review-events/status")
+        .query({ projectPath: projectDir, path: "draft.md" })
+        .then(
+          (response) => response.body as { watcherCount: number },
+        );
+      if (watcherStatus.watcherCount > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(watcherStatus?.watcherCount).toBe(1);
+
     const completedResponse = await request(app)
       .post("/api/review-loop/complete")
       .send({ projectPath: projectDir, path: "draft.md", roundId });
@@ -708,10 +731,45 @@ describe("createApp", () => {
       runIds: [runResponse.body.runId],
       savedVersion: saveResponse.body.version,
     });
-    expect(completedResponse.body.reviewEvent.delivered).toBe(false);
-    expect(completedResponse.body.reviewEvent.event.version).toBe(
-      saveResponse.body.version,
-    );
+    expect(completedResponse.body.reviewEvent).toMatchObject({
+      delivered: true,
+      delivery: {
+        state: "delivered",
+        watchers: [
+          {
+            source: "test-review-loop-complete",
+            state: "delivered",
+            documentPath: path.join(projectDir, "draft.md"),
+          },
+        ],
+      },
+      event: {
+        type: "review.completed",
+        handoffId: completedResponse.body.handoff.handoffId,
+        roundId,
+        runIds: [runResponse.body.runId],
+        savedVersion: saveResponse.body.version,
+        version: saveResponse.body.version,
+        handoffAt: completedResponse.body.handoff.handoffAt,
+      },
+    });
+
+    const watchResponse = await waitingPromise;
+    expect(watchResponse.status).toBe(200);
+    expect(watchResponse.body).toMatchObject({
+      timedOut: false,
+      events: [
+        {
+          type: "review.completed",
+          handoffId: completedResponse.body.handoff.handoffId,
+          roundId,
+          runIds: [runResponse.body.runId],
+          savedVersion: saveResponse.body.version,
+          version: saveResponse.body.version,
+          handoffAt: completedResponse.body.handoff.handoffAt,
+        },
+      ],
+    });
   });
 
   it("fails voice transcription loudly when no local command is configured", async () => {
