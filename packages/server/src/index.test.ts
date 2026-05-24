@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./index";
 
 describe("createApp", () => {
@@ -523,6 +523,119 @@ describe("createApp", () => {
     });
   });
 
+  it("creates redacted review-loop run proof through local-file endpoints", async () => {
+    const filePath = path.join(projectDir, "draft.md");
+    fs.writeFileSync(filePath, "# Draft\n\nTarget phrase.\n");
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+    });
+    const readResponse = await request(app).get("/api/markdown-file").query({
+      projectPath: projectDir,
+      path: "draft.md",
+    });
+
+    const runResponse = await request(app)
+      .post("/api/review-loop/runs")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        selection: {
+          from: 9,
+          to: 22,
+          selectedText: "Target phrase",
+        },
+      });
+
+    expect(runResponse.status).toBe(201);
+    expect(runResponse.body).toMatchObject({
+      documentPath: filePath,
+      projectPath: projectDir,
+      relativePath: "draft.md",
+      selectionLength: "Target phrase".length,
+      selectionRange: { from: 9, to: 22 },
+      preActionVersion: readResponse.body.version,
+      savedVersion: null,
+      status: "active",
+    });
+    expect(runResponse.body.selectionHash).toHaveLength(64);
+    expect(JSON.stringify(runResponse.body)).not.toContain("Target phrase");
+
+    const milestoneResponse = await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/milestones`)
+      .send({ milestone: "transcript_received", durationMs: 1200 });
+    expect(milestoneResponse.status).toBe(200);
+    expect(milestoneResponse.body.milestones).toEqual([
+      expect.objectContaining({
+        name: "transcript_received",
+        durationMs: 1200,
+      }),
+    ]);
+
+    const savedResponse = await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/saved-version`)
+      .send({ savedVersion: "saved:v2" });
+    expect(savedResponse.status).toBe(200);
+    expect(savedResponse.body.run).toMatchObject({
+      savedVersion: "saved:v2",
+      status: "saved",
+    });
+    expect(savedResponse.body.round).toMatchObject({
+      savedVersion: "saved:v2",
+      status: "open",
+      runIds: [runResponse.body.runId],
+    });
+
+    const statusResponse = await request(app)
+      .get("/api/review-loop/status")
+      .query({
+        projectPath: projectDir,
+        path: "draft.md",
+      });
+    expect(statusResponse.status).toBe(200);
+    expect(statusResponse.body.openRound).toMatchObject({
+      roundId: savedResponse.body.round.roundId,
+      savedVersion: "saved:v2",
+    });
+    expect(JSON.stringify(statusResponse.body)).not.toContain("Target phrase");
+  });
+
+  it("completes only saved review-loop rounds", async () => {
+    fs.writeFileSync(path.join(projectDir, "draft.md"), "# Draft\n");
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+    });
+
+    const blockedResponse = await request(app)
+      .post("/api/review-loop/complete")
+      .send({ projectPath: projectDir, path: "draft.md" });
+    expect(blockedResponse.status).toBe(409);
+
+    const runResponse = await request(app)
+      .post("/api/review-loop/runs")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        selection: { selectedText: "Draft" },
+      });
+    await request(app)
+      .post(`/api/review-loop/runs/${runResponse.body.runId}/saved-version`)
+      .send({ savedVersion: "saved:v2" })
+      .expect(200);
+
+    const completedResponse = await request(app)
+      .post("/api/review-loop/complete")
+      .send({ projectPath: projectDir, path: "draft.md" });
+    expect(completedResponse.status).toBe(201);
+    expect(completedResponse.body.handoff).toMatchObject({
+      roundId: expect.any(String),
+      runIds: [runResponse.body.runId],
+      savedVersion: "saved:v2",
+    });
+    expect(completedResponse.body.reviewEvent.delivered).toBe(false);
+  });
+
   it("fails voice transcription loudly when no local command is configured", async () => {
     const { app } = createApp({
       homeDir,
@@ -698,6 +811,56 @@ describe("createApp", () => {
       confidence: 0.8,
       uncertain: false,
     });
+  });
+
+  it("redacts raw voice text and model previews from default voice logs", async () => {
+    fs.writeFileSync(path.join(projectDir, "draft.md"), "# Draft\n");
+    process.env.OPENROUTER_API_KEY = "generic-test-key";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const { app } = createApp({
+      homeDir,
+      staticDirPath: projectDir,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "comment",
+                    content: "model output secret",
+                    confidence: 0.8,
+                  }),
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    });
+
+    const response = await request(app)
+      .post("/api/voice/process")
+      .send({
+        projectPath: projectDir,
+        path: "draft.md",
+        utterance: "utterance secret",
+        selection: {
+          selectedText: "selected secret",
+        },
+      });
+
+    expect(response.status).toBe(200);
+    const logs = logSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    logSpy.mockRestore();
+    expect(logs).not.toContain("utterance secret");
+    expect(logs).not.toContain("selected secret");
+    expect(logs).not.toContain("model output secret");
+    expect(logs).toContain("redactedFields");
   });
 
   it("lists directories from the home directory when no path is provided", async () => {

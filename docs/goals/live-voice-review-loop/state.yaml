@@ -1,0 +1,212 @@
+version: 2
+
+goal:
+  title: "Live Voice Review Loop"
+  slug: "live-voice-review-loop"
+  kind: existing_plan
+  tranche: "Complete Dale workflow from issue-backed shaping through verified implementation/finalize for the live voice review loop."
+  status: active
+  execution_lane: dale_workflow
+  intake:
+    original_request: "GoalBuddy proceed with using issue and produce this spec, then run the actual workflow."
+    interpreted_outcome: "Roughdraft's voice review loop is visibly trustworthy and continuously attached across review rounds."
+    execution_lane_reason: "defaulted to Dale workflow; no explicit direct-goal opt-out phrase matched"
+    input_shape: existing_plan
+    source_spec_path: "specs/001-live-voice-review-loop/spec.md"
+    source_bead: "bd-1ny1"
+    audience: "Dale on Apple Vision Pro and external coding agents using Roughdraft"
+    authority: approved
+    proof_type: manual
+    prior_failure_signal: true
+    completion_proof: "Automated gates plus AVP two-round manual trial prove truthful voice/agent status, timestamps, and watcher auto-rearm."
+    likely_misfire: "Stopping at the spec, plan, or animation while the real voice-to-agent loop still lacks truthful state or continuous watch."
+    blind_spots_considered:
+      - "False agent-working state"
+      - "One-shot watcher"
+      - "AVP selection endpoint uncertainty"
+      - "Animation distraction"
+      - "External-agent boundary"
+    existing_plan_facts:
+      - "Issue spec already exists at specs/001-live-voice-review-loop/spec.md."
+      - "Bead bd-1ny1 is in_progress."
+      - "Grill-me pass selected cohesive Live Voice Review Loop shape."
+      - "Shaping still needs to challenge the first pass before planning."
+    purpose_source_sections:
+      - "Source (verbatim)"
+      - "Problem"
+      - "Requirements"
+      - "Acceptance Criteria"
+
+  purpose_contract:
+    confirmation: user_confirmed
+    tangible_outcome: "Roughdraft's live voice review loop is visibly trustworthy from speech capture through external-agent reply."
+    done_proof:
+      - "Dale workflow reaches finalize or a truthful blocker."
+      - "Automated verification required by the approved plan passes."
+      - "AVP/manual two-round review demonstrates timestamps, status truth, and watcher auto-rearm."
+    false_positives:
+      - "Spec exists but shaping did not challenge it."
+      - "UI looks cool but still lies about agent state."
+      - "One handoff works but the watcher does not rearm."
+      - "Tests pass without the manual AVP workflow proof."
+    required_outcome_checks:
+      - id: OC1
+        description: "Shaping challenges and confirms or revises the selected shape."
+        status: done
+        evidence:
+          - "specs/001-live-voice-review-loop/shaping-transcript.md"
+          - "specs/001-live-voice-review-loop/spec.md"
+          - "docs/goals/live-voice-review-loop/notes/T002-codex-shape.md"
+      - id: OC2
+        description: "Planning records implementation slices, risks, and AVP/manual proof."
+        status: done
+        evidence:
+          - "specs/001-live-voice-review-loop/plan.md"
+          - "specs/001-live-voice-review-loop/tasks.md"
+          - "specs/001-live-voice-review-loop/planning-transcript.md"
+          - "docs/goals/live-voice-review-loop/notes/T003-codex-plan.md"
+      - id: OC3
+        description: "Implementation changes app/CLI/server behavior, not just docs."
+        status: pending
+        evidence: []
+      - id: OC4
+        description: "Verification proves no false agent-working state and at least two handoff events through continuous watch."
+        status: pending
+        evidence: []
+      - id: OC5
+        description: "Finalize closes the bead only after full user outcome is met or truthfully blocked."
+        status: pending
+        evidence: []
+
+rules:
+  pm_owns_state: true
+  one_active_task: true
+  max_write_workers: 1
+  no_implementation_without_worker_or_pm_task: true
+  no_completion_without_judge_or_pm_audit: true
+  planning_is_not_completion: true
+  queued_required_worker_blocks_completion: true
+  continuous_until_full_outcome: true
+  missing_input_or_credentials_do_not_stop_goal: true
+  operator_input_pause_required: true
+  preserve_and_validate_existing_plan: true
+  intake_misfire_must_be_audited: true
+  purpose_contract_required: true
+  slice_policy:
+    max_consecutive_tiny_tasks: 2
+    prefer_vertical_slices: true
+    judge_picks_largest_safe_slice: true
+    worker_completes_whole_slice: true
+
+agents:
+  scout: unknown
+  worker: unknown
+  judge: unknown
+
+visual_board:
+  selected: local
+  local:
+    status: starting
+    url: null
+    command: "npx goalbuddy board /Users/dalecarman/dev/roughdraft/docs/goals/live-voice-review-loop"
+  github_projects:
+    status: not_requested
+    url: null
+    command: "npx goalbuddy extend github-projects"
+    missing: []
+
+workflow:
+  profile: dale_codex
+  sequence:
+    - command: "$issue"
+      purpose: "Create or confirm the bead-backed spec."
+      when: "Already complete for specs/001-live-voice-review-loop/."
+    - command: "$codex-shape"
+      purpose: "Challenge and refine the Live Voice Review Loop shape before planning."
+      when: "Active next step."
+    - command: "$codex-plan"
+      purpose: "Create plan.md, tasks.md, planning transcript, and plan provenance."
+      when: "Run after shaping completes."
+    - command: "$codex-review"
+      purpose: "Get a fresh independent Codex approval of the plan."
+      when: "Run after $codex-plan and before $codex-implement."
+    - command: "$codex-implement"
+      purpose: "Implement the approved plan with verification."
+      when: "Run after $codex-review approves."
+    - command: "$code-verify"
+      purpose: "Run independent post-implementation verification."
+      when: "Run after $codex-implement records implement-receipt.md."
+    - command: "$finalize"
+      purpose: "Close the bead, create final handoff, commit, and push."
+      when: "Run only after $code-verify approval."
+
+active_task: T005
+
+tasks:
+  - id: T001
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Run $issue for the Live Voice Review Loop."
+    inputs:
+      - "User grill-me decisions"
+      - ".context/live-voice-review-loop-spec.md"
+    expected_output:
+      - "Bead bd-1ny1"
+      - "specs/001-live-voice-review-loop/spec.md"
+    receipt: "docs/goals/live-voice-review-loop/notes/T001-issue.md"
+  - id: T002
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: high
+    objective: "Run $codex-shape specs/001-live-voice-review-loop/ using the issue spec and grill-me first pass as seed material, while allowing shaping to challenge or revise the selected shape."
+    inputs:
+      - "specs/001-live-voice-review-loop/spec.md"
+      - ".context/live-voice-review-loop-spec.md"
+      - "Current Roughdraft source and tests"
+    constraints:
+      - "Do not rubber-stamp the grill-me pass."
+      - "Use actual $codex-shape protocol."
+      - "Record shaping transcript and gate provenance."
+    expected_output:
+      - "specs/001-live-voice-review-loop/shaping-transcript.md"
+      - "Updated spec if shaping revises issue-level shape"
+      - "Gate record/verify for shape"
+    receipt: "docs/goals/live-voice-review-loop/notes/T002-codex-shape.md"
+  - id: T003
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: high
+    objective: "Run $codex-plan specs/001-live-voice-review-loop/ after shaping completes."
+    receipt: "docs/goals/live-voice-review-loop/notes/T003-codex-plan.md"
+  - id: T004
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: high
+    objective: "Run $codex-review specs/001-live-voice-review-loop/ after planning completes."
+    receipt: "docs/goals/live-voice-review-loop/notes/T004-codex-review.md"
+  - id: T005
+    type: pm
+    assignee: PM
+    status: active
+    reasoning_hint: high
+    objective: "Run $codex-implement specs/001-live-voice-review-loop/ after plan review approves."
+    receipt: null
+  - id: T006
+    type: pm
+    assignee: PM
+    status: queued
+    reasoning_hint: high
+    objective: "Run $code-verify specs/001-live-voice-review-loop/ after implementation completes."
+    receipt: null
+  - id: T007
+    type: pm
+    assignee: PM
+    status: queued
+    reasoning_hint: high
+    objective: "Run $finalize specs/001-live-voice-review-loop/ after code verification approves."
+    receipt: null

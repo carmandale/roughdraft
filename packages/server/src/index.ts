@@ -14,6 +14,10 @@ import {
   ROUGHDRAFT_PUBLIC_HOST,
   resolveBindHosts,
 } from "./network.js";
+import {
+  ReviewLoopProofHelper,
+  type ReviewLoopMilestone,
+} from "./review-loop.js";
 import { ReviewEventQueue } from "./review-events.js";
 import { resolveUpdateStatus } from "./update-status.js";
 
@@ -118,6 +122,26 @@ interface VoiceProcessPayload {
   selection?: VoiceSelectionPayload;
 }
 
+interface ReviewLoopRunPayload {
+  path?: string;
+  projectPath?: string;
+  selection?: VoiceSelectionPayload;
+}
+
+const REVIEW_LOOP_MILESTONES = new Set<ReviewLoopMilestone>([
+  "recording_started",
+  "stopping",
+  "transcribing",
+  "transcript_received",
+  "classification_requested",
+  "classification_completed",
+  "edit_applied",
+  "save_started",
+  "saved",
+  "discarded",
+  "failed",
+]);
+
 type VoiceActionType =
   | "comment"
   | "suggestion_addition"
@@ -191,10 +215,27 @@ interface VoiceTranscriptionSession {
 }
 
 function logVoice(event: string, data: Record<string, unknown> = {}): void {
+  const redactedFields: string[] = [];
+  const redactedData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (
+      /Preview$/i.test(key) ||
+      key === "transcript" ||
+      key === "utterance" ||
+      key === "selectedText" ||
+      key === "content" ||
+      key === "replacementText"
+    ) {
+      redactedFields.push(key);
+      continue;
+    }
+    redactedData[key] = value;
+  }
   const payload = {
     ts: new Date().toISOString(),
     event,
-    ...data,
+    ...redactedData,
+    ...(redactedFields.length > 0 ? { redactedFields } : {}),
   };
   console.log(`[voice] ${JSON.stringify(payload)}`);
 }
@@ -813,6 +854,7 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
   const app = express();
   const openRequestClients = new Set<OpenRequestClient>();
   const reviewEvents = new ReviewEventQueue();
+  const reviewLoop = new ReviewLoopProofHelper();
   const remoteSessions = new Map<string, RemoteSession>();
   const voiceSessions = new Map<string, VoiceTranscriptionSession>();
 
@@ -1102,6 +1144,122 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
       watching: watcherCount > 0,
       watcherCount,
     });
+  });
+
+  app.post("/api/review-loop/runs", (req, res) => {
+    const target = markdownPathFromRequest(req, res);
+    if (!target) return;
+
+    const payload = req.body as ReviewLoopRunPayload;
+    const selection = payload.selection;
+    const selectedText =
+      typeof selection?.selectedText === "string" ? selection.selectedText : "";
+    if (selectedText.length === 0) {
+      res.status(400).json({ error: "selection.selectedText is required" });
+      return;
+    }
+
+    try {
+      const run = reviewLoop.createRun({
+        documentPath: target.absolutePath,
+        projectPath: target.projectDir,
+        relativePath: target.relativePath,
+        preActionVersion: fileVersionFromFile(target.absolutePath),
+        selection: {
+          from: typeof selection?.from === "number" ? selection.from : undefined,
+          to: typeof selection?.to === "number" ? selection.to : undefined,
+          selectedText,
+        },
+      });
+      res.status(201).json(run);
+    } catch (error) {
+      res.status(400).json({
+        error:
+          error instanceof Error ? error.message : "review run not created",
+      });
+    }
+  });
+
+  app.post("/api/review-loop/runs/:runId/milestones", (req, res) => {
+    const milestone =
+      typeof req.body?.milestone === "string" ? req.body.milestone : "";
+    if (!REVIEW_LOOP_MILESTONES.has(milestone as ReviewLoopMilestone)) {
+      res.status(400).json({ error: "valid milestone is required" });
+      return;
+    }
+
+    try {
+      const run = reviewLoop.recordMilestone(
+        req.params.runId,
+        milestone as ReviewLoopMilestone,
+        {
+          durationMs:
+            typeof req.body?.durationMs === "number"
+              ? req.body.durationMs
+              : undefined,
+          errorClass:
+            typeof req.body?.errorClass === "string"
+              ? req.body.errorClass
+              : undefined,
+        },
+      );
+      res.json(run);
+    } catch (error) {
+      res.status(404).json({
+        error: error instanceof Error ? error.message : "review run not found",
+      });
+    }
+  });
+
+  app.post("/api/review-loop/runs/:runId/saved-version", (req, res) => {
+    const savedVersion =
+      typeof req.body?.savedVersion === "string"
+        ? req.body.savedVersion.trim()
+        : "";
+    if (!savedVersion) {
+      res.status(400).json({ error: "savedVersion is required" });
+      return;
+    }
+
+    try {
+      res.json(reviewLoop.markSavedVersion(req.params.runId, savedVersion));
+    } catch (error) {
+      res.status(404).json({
+        error: error instanceof Error ? error.message : "review run not found",
+      });
+    }
+  });
+
+  app.get("/api/review-loop/status", (req, res) => {
+    const target = markdownPathFromRequest(req, res);
+    if (!target) return;
+    res.json(reviewLoop.statusForDocument(target.absolutePath));
+  });
+
+  app.post("/api/review-loop/complete", (req, res) => {
+    const target = markdownPathFromRequest(req, res);
+    if (!target) return;
+
+    try {
+      const handoff = reviewLoop.completeRound(target.absolutePath);
+      const markdown = fs.readFileSync(target.absolutePath, "utf-8");
+      const index = extractRoughdraftReviewIndex(markdown);
+      const result = reviewEvents.emit({
+        documentPath: target.absolutePath,
+        projectPath: target.projectDir,
+        relativePath: target.relativePath,
+        version: handoff.savedVersion,
+        summary: index.summary,
+      });
+      res.status(201).json({ handoff, reviewEvent: result });
+    } catch (error) {
+      res.status(409).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "review round not completed",
+      });
+    }
   });
 
   app.post("/api/voice/session/start", (_req, res) => {

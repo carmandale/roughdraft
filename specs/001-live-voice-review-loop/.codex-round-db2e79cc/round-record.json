@@ -1,0 +1,19 @@
+{
+  "baseline_sha": "076453a68dc42e362624a58caef9a7bf29e15dd9",
+  "checkpoint_sessions": [],
+  "codex_session_id": "019e5a1f-00da-7460-b452-08a66f1f8dc4",
+  "command": "codex-review",
+  "halt_detected_at": null,
+  "halt_marker_line": null,
+  "parent_round": null,
+  "phase": "default",
+  "review_id": "db2e79cc",
+  "round_state": "closed-success",
+  "schema_version": 1,
+  "spec_path": "specs/001-live-voice-review-loop",
+  "staging_path": "/Users/dalecarman/dev/roughdraft/specs/001-live-voice-review-loop/.codex-round-z2z0tvqp-db2e79cc-staging/output.md",
+  "start_timestamp": "2026-05-24T13:14:00.780305Z",
+  "surfaceable_path": "/Users/dalecarman/dev/roughdraft/specs/001-live-voice-review-loop/.codex-round-db2e79cc/output.md",
+  "temp_file_family": "codex-review-*-db2e79cc.md",
+  "trust_level": "full"
+}
