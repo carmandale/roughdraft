@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type DocumentSaveController,
+  nextVoiceProgressState,
   PageCard,
   VOICE_REVIEW_TIMELINE_STAGES,
 } from "./PageCard";
@@ -266,6 +267,63 @@ describe("PageCard voice review proof", () => {
     ]);
   });
 
+  it("keeps stale progress from overwriting a newer voice run", () => {
+    const current = {
+      runId: 2,
+      stage: "listening" as const,
+      message: "Listening...",
+    };
+    const older = {
+      runId: 1,
+      stage: "transcribing" as const,
+      message: "Transcribing audio...",
+    };
+
+    expect(nextVoiceProgressState(current, older, 2)).toBe(current);
+    expect(nextVoiceProgressState(null, older, 2)).toMatchObject({
+      runId: 1,
+      stage: "stale",
+      message: "Skipped stale voice run.",
+    });
+  });
+
+  it("discards too-short selection releases without transcribing or saving", async () => {
+    let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const createReviewRun = vi.fn(async () => createReviewRunProof());
+    const recordReviewRunMilestone = vi.fn(async (runId: string) =>
+      createReviewRunProof({ runId }),
+    );
+    const processVoiceUtterance = vi.fn(async () => ({
+      action: "comment" as const,
+      content: "Make this clearer",
+      confidence: 0.95,
+    }));
+    const backend = createBackend({
+      createReviewRun,
+      recordReviewRunMilestone,
+      processVoiceUtterance,
+    });
+    const rendered = await renderPageCard({ backend });
+
+    await selectText(rendered.getEditor(), "target");
+    await waitUntil(() => expect(createReviewRun).toHaveBeenCalledTimes(1));
+    nowMs = 1_200;
+    await clearSelection(rendered.getEditor());
+
+    await waitUntil(() =>
+      expect(recordReviewRunMilestone.mock.calls).toContainEqual([
+        "run-1",
+        "discarded",
+        undefined,
+      ]),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(processVoiceUtterance).not.toHaveBeenCalled();
+    expect(rendered.onSave).not.toHaveBeenCalled();
+  });
+
   it("records, transcribes, applies, saves, and binds saved version proof on selection release", async () => {
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -362,6 +420,82 @@ describe("PageCard voice review proof", () => {
         "save_started",
       ]),
     );
+  });
+
+  it("fails the voice proof when save succeeds without a saved file version", async () => {
+    let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/voice/session/start") {
+        return jsonResponse({ sessionId: "voice-session-1" });
+      }
+      if (url === "/api/voice/session/chunk") {
+        return jsonResponse({ ok: true });
+      }
+      if (url === "/api/voice/session/stop") {
+        return jsonResponse({ transcript: "Make this clearer" });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const createReviewRun = vi.fn(async () => createReviewRunProof());
+    const recordReviewRunMilestone = vi.fn(async (runId: string) =>
+      createReviewRunProof({ runId }),
+    );
+    const markReviewRunSavedVersion = vi.fn(
+      async (runId: string, relativePath: string, savedVersion: string) => ({
+        run: createReviewRunProof({
+          runId,
+          relativePath,
+          savedVersion,
+          status: "saved",
+        }),
+        round: {
+          roundId: "round-1",
+          documentPath: "/tmp/project/draft.md",
+          projectPath: "/tmp/project",
+          relativePath,
+          runIds: [runId],
+          savedVersion,
+          status: "open" as const,
+          createdAt: new Date("2026-05-24T12:00:00.000Z").toISOString(),
+          updatedAt: new Date("2026-05-24T12:00:00.000Z").toISOString(),
+        },
+      }),
+    );
+    const processVoiceUtterance = vi.fn(async () => ({
+      action: "comment" as const,
+      content: "Make this clearer",
+      confidence: 0.95,
+    }));
+    const backend = createBackend({
+      createReviewRun,
+      recordReviewRunMilestone,
+      markReviewRunSavedVersion,
+      processVoiceUtterance,
+    });
+    const rendered = await renderPageCard({ backend });
+
+    rendered.onSave.mockResolvedValue({
+      id: TEST_PAGE.id,
+      title: TEST_PAGE.title,
+      content: "saved markdown",
+    });
+
+    await selectText(rendered.getEditor(), "target");
+    await waitUntil(() => expect(createReviewRun).toHaveBeenCalledTimes(1));
+    nowMs = 1_700;
+    await clearSelection(rendered.getEditor());
+
+    await waitUntil(() =>
+      expect(recordReviewRunMilestone).toHaveBeenCalledWith(
+        "run-1",
+        "failed",
+        expect.objectContaining({ errorClass: "error" }),
+      ),
+    );
+    expect(markReviewRunSavedVersion).not.toHaveBeenCalled();
   });
 
   async function renderPageCard({

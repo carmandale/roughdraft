@@ -68,6 +68,33 @@ export const VOICE_REVIEW_TIMELINE_STAGES = [
 ] as const;
 type VoiceProgressStage = (typeof VOICE_REVIEW_TIMELINE_STAGES)[number];
 
+type VoiceProgressState = {
+  runId: number;
+  stage: VoiceProgressStage;
+  message: string;
+  startedAtMs?: number;
+  updatedAtMs?: number;
+  elapsedMs?: number;
+};
+
+export function nextVoiceProgressState(
+  current: VoiceProgressState | null,
+  next: VoiceProgressState,
+  latestRunId: number,
+): VoiceProgressState {
+  if (next.runId < latestRunId) {
+    if (current && current.runId > next.runId) return current;
+    return {
+      ...next,
+      stage: "stale",
+      message: "Skipped stale voice run.",
+    };
+  }
+
+  if (current && next.runId < current.runId) return current;
+  return next;
+}
+
 interface PageCardProps {
   page: Page;
   activeDocumentPath?: string | null;
@@ -799,14 +826,8 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
     "idle" | "recording" | "processing" | "paused" | "error"
   >("idle");
   const [voiceStatusMessage, setVoiceStatusMessage] = useState<string>("");
-  const [voiceProgress, setVoiceProgress] = useState<{
-    runId: number;
-    stage: VoiceProgressStage;
-    message: string;
-    startedAtMs?: number;
-    updatedAtMs?: number;
-    elapsedMs?: number;
-  } | null>(null);
+  const [voiceProgress, setVoiceProgress] =
+    useState<VoiceProgressState | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceSelectionRef = useRef<VoiceSelectionSnapshot | null>(null);
@@ -829,14 +850,17 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
       startedAtMs?: number,
     ) => {
       const now = Date.now();
-      setVoiceProgress({
+      const next = {
         runId,
         stage,
         message,
         startedAtMs,
         updatedAtMs: now,
         elapsedMs: startedAtMs ? now - startedAtMs : undefined,
-      });
+      };
+      setVoiceProgress((current) =>
+        nextVoiceProgressState(current, next, voiceProgressRunRef.current),
+      );
     },
     [],
   );
@@ -3264,7 +3288,13 @@ const PageCardEditorSurface = memo(function PageCardEditorSurface({
 
       await backend.recordReviewRunMilestone(reviewRunId, "save_started");
       const result = await flushSave();
-      if (result.status !== "saved" || !result.savedVersion) return result;
+      if (result.status !== "saved") return result;
+      if (!result.savedVersion) {
+        return {
+          status: "error",
+          error: new Error("Saved Markdown version missing."),
+        };
+      }
 
       await backend.markReviewRunSavedVersion(
         reviewRunId,

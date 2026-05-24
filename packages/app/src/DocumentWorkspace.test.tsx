@@ -112,6 +112,36 @@ describe("DocumentWorkspace review handoff", () => {
     );
   });
 
+  it("shows explicit unsupported feedback when the backend cannot deliver live handoff", async () => {
+    const backend = createBackend({
+      getReviewWatchStatus: async () => ({
+        watching: true,
+        watcherCount: 1,
+        watchers: [],
+      }),
+    });
+
+    await renderWorkspace({
+      backend,
+      onCompleteReview: vi.fn(async () => ({
+        delivered: false,
+        reason: "not_supported" as const,
+      })),
+    });
+    await tick();
+
+    const button = container?.querySelector<HTMLButtonElement>(
+      "[data-testid='review-handoff-button']",
+    );
+    expect(button).toBeTruthy();
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container?.textContent).toContain("Live review unsupported");
+  });
+
   async function renderWorkspace({
     backend,
     onCompleteReview,

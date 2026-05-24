@@ -56,6 +56,7 @@ import { PreviewBackend } from "./preview-backend";
 import { RoughdraftFormatDemo } from "./RoughdraftFormatDemo";
 import {
   MarkdownFileConflictError,
+  type CompleteReviewResult,
   type Page,
   type StorageBackend,
 } from "./storage";
@@ -88,6 +89,34 @@ export function shouldWarnBeforeUnload({
       saveState === "error" ||
       diskChangeState !== "clean")
   );
+}
+
+export async function completeSavedReviewRound(
+  currentBackend: StorageBackend | null | undefined,
+  currentPath: string | null | undefined,
+  request?: { savedVersion?: string },
+): Promise<CompleteReviewResult> {
+  if (!currentBackend || !currentPath) {
+    return { delivered: false, reason: "not_supported" };
+  }
+
+  if (!currentBackend.completeReview || !currentBackend.getReviewLoopStatus) {
+    return { delivered: false, reason: "not_supported" };
+  }
+
+  const reviewLoopStatus = await currentBackend.getReviewLoopStatus(currentPath);
+  const roundId = reviewLoopStatus?.openRound?.roundId;
+  const savedVersion = reviewLoopStatus?.openRound?.savedVersion;
+  const expectedSavedVersion = request?.savedVersion;
+  if (
+    !roundId ||
+    !savedVersion ||
+    (expectedSavedVersion && savedVersion !== expectedSavedVersion)
+  ) {
+    return { delivered: false, reason: "missing_review_round" };
+  }
+
+  return currentBackend.completeReview(currentPath, { roundId });
 }
 
 const AGENT_SETUP_PROMPT =
@@ -1763,33 +1792,11 @@ export function App() {
 
   const handleCompleteReview = useCallback(
     async (request?: { savedVersion?: string }) => {
-      const currentBackend = backendRef.current;
-      const currentPath = activeDocumentPathRef.current;
-      if (!currentBackend || !currentPath) {
-        return { delivered: false, reason: "not_supported" as const };
-      }
-
-      if (
-        !currentBackend.completeReview ||
-        !currentBackend.getReviewLoopStatus
-      ) {
-        return { delivered: false, reason: "not_supported" as const };
-      }
-
-      const reviewLoopStatus =
-        await currentBackend.getReviewLoopStatus(currentPath);
-      const roundId = reviewLoopStatus?.openRound?.roundId;
-      const savedVersion = reviewLoopStatus?.openRound?.savedVersion;
-      const expectedSavedVersion = request?.savedVersion;
-      if (
-        !roundId ||
-        !savedVersion ||
-        (expectedSavedVersion && savedVersion !== expectedSavedVersion)
-      ) {
-        return { delivered: false, reason: "missing_review_round" as const };
-      }
-
-      return currentBackend.completeReview(currentPath, { roundId });
+      return completeSavedReviewRound(
+        backendRef.current,
+        activeDocumentPathRef.current,
+        request,
+      );
     },
     [],
   );
